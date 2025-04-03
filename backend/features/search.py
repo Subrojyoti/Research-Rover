@@ -5,6 +5,8 @@ import re
 from .helper.doi_finder import get_doi
 from .helper.extract_secrets import get_secrets
 from .helper.doi_info_scraper import fetch_bibtex, bibtex_to_formatted_text
+from .helper.keywords_scraper import get_keywords_for_doi
+
 # --- Constants and Configuration ---
 CORE_API_KEY = get_secrets("core_api")
 CORE_API_ENDPOINT = "https://api.core.ac.uk/v3/"
@@ -84,6 +86,8 @@ def extract_and_save_to_csv(data, csv_file_name):
                     doi = get_doi(title)
                 if doi:
                     reference, keywords = bibtex_to_formatted_text(fetch_bibtex(doi))
+                    if not keywords:
+                        keywords = get_keywords_for_doi(doi)
                 entry = {
                     "Source": clean_text(provider_name),
                     "Reference": reference,

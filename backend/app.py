@@ -50,13 +50,13 @@ def search():
             return jsonify({"error": "No results found"}), 404
 
         # Sanitize the filename
-        csv_filename = f'{sanitize_filename(query)}.csv'
+        csv_filename = f'{re.sub(r"[^a-zA-Z0-9]", "_", query)}.csv'
         csv_path = os.path.join(DATA_FOLDER, csv_filename)
         extract_and_save_to_csv(results, csv_path)
 
         # Return initial results immediately
         return jsonify({
-            "results": results[:10],
+            "results": results[:min(10, len(results))],
             "csv_filename": csv_filename,
             "total_results": len(results)
         })
@@ -86,7 +86,7 @@ def get_csv_data(filename):
         # Read CSV in chunks to handle large files
         with open(csv_path, 'r', encoding='utf-8-sig') as file:
             reader = csv.DictReader(file)
-            chunk_size = 1000  # Process 1000 rows at a time
+            chunk_size = 10  # Process 10 rows at a time
             chunk = []
             
             for row in reader:

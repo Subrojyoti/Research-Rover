@@ -1,36 +1,21 @@
 import requests
 import os
 import csv
+import re
+from .helper.doi_finder import get_doi
+from .helper.extract_secrets import get_secrets
+from .helper.doi_info_scraper import fetch_bibtex, bibtex_to_formatted_text
+# --- Constants and Configuration ---
+CORE_API_KEY = get_secrets("core_api")
+CORE_API_ENDPOINT = "https://api.core.ac.uk/v3/"
+HEADERS = {"Authorization": f"Bearer {CORE_API_KEY}"}
 
-def get_api_key():
-    try:
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        api_key_path = os.path.join(current_dir, "..", "apikey.txt")
-        
-        if not os.path.exists(api_key_path):
-            raise FileNotFoundError(f"API key file not found at: {api_key_path}")
-            
-        with open(api_key_path, "r") as apikey_file:
-            api_key = apikey_file.readlines()[0].strip()
-            if not api_key:
-                raise ValueError("API key is empty")
-            return api_key
-    except FileNotFoundError as e:
-        print(f"Error: {str(e)}")
-        print("Please create an apikey.txt file in the backend directory with your CORE API key")
-        raise
-    except Exception as e:
-        raise Exception(f"Error reading API key: {e}")
-
-API_KEY = get_api_key()
-API_ENDPOINT = "https://api.core.ac.uk/v3/"
-HEADERS = {"Authorization": f"Bearer {API_KEY}"}
-
-def search_works(query, limit=100, max_results=100):
+# Search for works using the CORE API
+def search_works(query, limit=100, max_results=30):
     results = []
-    url = f"{API_ENDPOINT}search/works?q={query}&limit={limit}&scroll=true"
+    url = f"{CORE_API_ENDPOINT}search/works?q={query}&limit={limit}&scroll=true"
+    print(f">>>Searching for {query}")
     response = requests.get(url, headers=HEADERS)
-    
     if response.status_code == 200:
         print(f"Search successful for query: {query}")
         data = response.json()
@@ -46,41 +31,68 @@ def search_works(query, limit=100, max_results=100):
                 scroll_id = data.get("scrollId")
             else:
                 break
+    else:
+        print("Search Unsuccesfull")
+    print(f"Total results found: {len(results)}")
     return results[:max_results]
 
+
 def extract_and_save_to_csv(data, csv_file_name):
-    headers = ["Source", "Source_URL", "Title", "Download_URL", "Abstract", "Full_Text", "Year_Published"]
+    headers = ["Source", "Reference", "Doi", "Title", "Download_URL", "Abstract", "Keywords", "Full_Text", "Year_Published"]
     extracted_data = []
+    
+    def clean_text(text):
+        if not text:
+            return ""
+        # Remove newlines and excessive whitespace
+        return ' '.join(str(text).replace('\n', ' ').split())
     
     try:
         with open(csv_file_name, "w", encoding="utf-8", newline='') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=headers)
             writer.writeheader()
             
-            for work_item in data[:10]:
+            for work_item in data:
+                title = clean_text(work_item.get('title', ''))
+                if title.lower().startswith("annual report"):
+                    continue
+                language = work_item.get('language')
+                if not language:
+                    continue  # Skip if no language is found
+                if not language.get('code') or language.get('code') != 'en':
+                    continue
+                # Initialize with default values
                 provider_name = "Unknown"
-                provider_url = "Unknown"
-                
-                # Safely check for dataProviders
+                # Extract provider info
                 data_providers = work_item.get('dataProviders', [])
                 if data_providers and len(data_providers) > 0 and 'url' in data_providers[0]:
-                    provider = data_providers[0]['url']
+                    provider = data_providers[0].get('url')
                     try:
                         provider_info = requests.get(provider, headers=HEADERS)
                         if provider_info.status_code == 200:
                             provider_info = provider_info.json()
                             provider_name = provider_info.get('name', "Unknown")
-                            provider_url = provider_info.get('homepageUrl', "Unknown")
                     except:
                         pass
                 
+                
+                # Handle DOI extraction
+                doi = work_item.get("doi", "")
+                reference = ""
+                keywords = []
+                if not doi:
+                    doi = get_doi(title)
+                if doi:
+                    reference, keywords = bibtex_to_formatted_text(fetch_bibtex(doi))
                 entry = {
-                    "Source": provider_name,
-                    "Source_URL": provider_url,
-                    "Title": work_item.get("title", ""),
-                    "Download_URL": work_item.get("downloadUrl", ""),
-                    "Abstract": work_item.get("abstract", ""),
-                    "Full_Text": work_item.get("fullText", ""),
+                    "Source": clean_text(provider_name),
+                    "Reference": reference,
+                    "Doi": clean_text(doi),
+                    "Title": clean_text(work_item.get("title", "")),
+                    "Download_URL": clean_text(work_item.get("downloadUrl", "")),
+                    "Abstract": clean_text(work_item.get("abstract", "")),
+                    "Keywords": keywords,
+                    "Full_Text": clean_text(work_item.get("fullText", "")),
                     "Year_Published": work_item.get("yearPublished", ""),
                 }
                 

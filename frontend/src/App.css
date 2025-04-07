@@ -1,42 +1,442 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
+/* Global styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+/* Remove any existing styles that might conflict with Material-UI */
+.App {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Reset and base styles */
+:root {
+  /* Primary Colors */
+  --primary-dark: #1A1A1A;
+  --primary-light: #F8F9FA;
+  
+  /* Accent Colors */
+  --accent-gold: #D4AF37;
+  --accent-silver: #C0C0C0;
+  
+  /* Neutral Colors */
+  --neutral-100: #FFFFFF;
+  --neutral-200: #F5F5F5;
+  --neutral-300: #E0E0E0;
+  --neutral-400: #BDBDBD;
+  --neutral-500: #9E9E9E;
+  --neutral-600: #757575;
+  --neutral-700: #616161;
+  --neutral-800: #424242;
+  --neutral-900: #212121;
+  
+  /* Border Radius */
+  --border-radius: 8px;
+  
+  /* Box Shadow */
+  --box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+  
+  /* Text Colors */
+  --text-color: #1A1A1A;
+  --light-gray: #E0E0E0;
+  --primary-color: #3A86FF;
+}
+
+html {
+  scroll-behavior: auto;
+}
+
+body {
+  font-family: 'Roboto', sans-serif;
+  background-color: var(--neutral-100);
+  color: var(--neutral-900);
+  line-height: 1.6;
+}
+
+/* Header Styles */
+.header {
+  padding: 4rem 2rem;
+  text-align: center;
+  background: linear-gradient(135deg, var(--primary-dark) 0%, var(--neutral-800) 100%);
+  color: var(--neutral-100);
+  position: relative;
+  overflow: hidden;
+}
+
+.header::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: url('/pattern.svg') repeat;
+  opacity: 0.1;
+  z-index: 1;
+}
+
+.header h1 {
+  font-family: 'Inter', sans-serif;
+  font-size: 3.5rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  position: relative;
+  z-index: 2;
+}
+
+.header p {
+  font-size: 1.25rem;
+  opacity: 0.9;
+  position: relative;
+  z-index: 2;
+}
+
+/* Main Content */
+.main-content {
+  flex: 1;
   padding: 2rem;
+  background-color: var(--neutral-100);
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 1rem;
+}
+
+/* Footer */
+.footer {
+  padding: 2rem;
+  background-color: var(--primary-dark);
+  color: var(--neutral-100);
   text-align: center;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+/* Animations */
+.animate-title {
+  opacity: 0;
+  transform: translateY(20px);
+  animation: fadeInUp 0.8s ease forwards;
 }
 
-@keyframes logo-spin {
+.animate-subtitle {
+  opacity: 0;
+  transform: translateY(20px);
+  animation: fadeInUp 0.8s ease forwards 0.2s;
+}
+
+@keyframes fadeInUp {
   from {
-    transform: rotate(0deg);
+    opacity: 0;
+    transform: translateY(20px);
   }
   to {
-    transform: rotate(360deg);
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
+/* Responsive Design */
+@media (max-width: 768px) {
+  .header {
+    padding: 3rem 1rem;
+  }
+
+  .header h1 {
+    font-size: 2.5rem;
+  }
+
+  .header p {
+    font-size: 1rem;
+  }
+
+  .main-content {
+    padding: 1rem;
   }
 }
 
-.card {
-  padding: 2em;
+/* Premium UI Elements */
+.premium-card {
+  background: var(--neutral-100);
+  border-radius: 12px;
+  padding: 2rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+  transition: all 0.3s ease-in-out;
 }
 
-.read-the-docs {
-  color: #888;
+.premium-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1);
+}
+
+.premium-button {
+  background: linear-gradient(135deg, var(--accent-gold) 0%, var(--accent-silver) 100%);
+  color: var(--primary-dark);
+  border: none;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease-in-out;
+}
+
+.premium-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Loading States */
+.loading-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--neutral-200) 25%,
+    var(--neutral-300) 37%,
+    var(--neutral-200) 63%
+  );
+  background-size: 400% 100%;
+  animation: skeleton-loading 1.4s ease infinite;
+}
+
+@keyframes skeleton-loading {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+/* SearchPage Styles */
+.search-container {
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.search-section {
+  background-color: white;
+  border-radius: var(--border-radius);
+  box-shadow: var(--box-shadow);
+  padding: 2rem;
+  margin-bottom: 2rem;
+  text-align: center;
+}
+
+.search-title {
+  font-size: 1.8rem;
+  font-weight: 600;
+  color: var(--text-color);
+  margin-bottom: 0.5rem;
+}
+
+.search-description {
+  color: #6c757d;
+  margin-bottom: 1.5rem;
+}
+
+.search-form {
+  max-width: 700px;
+  margin: 0 auto;
+}
+
+.search-input-group {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.search-input {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--light-gray);
+  border-radius: var(--border-radius);
+  font-size: 1rem;
+}
+
+.search-input:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(58, 134, 255, 0.2);
+}
+
+.search-button {
+  padding: 0.75rem 1.5rem;
+  white-space: nowrap;
+}
+
+.error-message {
+  color: #dc3545;
+  background-color: #f8d7da;
+  border: 1px solid #f5c6cb;
+  border-radius: var(--border-radius);
+  padding: 0.75rem;
+  margin-top: 1rem;
+  text-align: left;
+}
+
+.results-section {
+  background-color: white;
+  border-radius: var(--border-radius);
+  box-shadow: var(--box-shadow);
+  padding: 2rem;
+}
+
+.results-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.results-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.results-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.loading-indicator {
+  color: #6c757d;
+  font-style: italic;
+}
+
+.papers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.5rem;
+}
+
+.paper-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.paper-title {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--text-color);
+  margin-bottom: 1rem;
+  line-height: 1.4;
+}
+
+.paper-details {
+  margin-bottom: 1.5rem;
+  flex-grow: 1;
+}
+
+.paper-source, .paper-year {
+  margin-bottom: 0.5rem;
+  color: #6c757d;
+}
+
+.detail-label {
+  font-weight: 600;
+  margin-right: 0.5rem;
+}
+
+.paper-download {
+  align-self: flex-start;
+  margin-top: auto;
+}
+
+/* Progress Bar Styles */
+.search-progress-container {
+  margin: 2rem auto;
+  max-width: 800px;
+  padding: 0 1rem;
+}
+
+.search-progress-bar {
+  position: relative;
+  height: 80px;
+  margin-top: 20px;
+}
+
+.progress-line {
+  position: absolute;
+  height: 3px;
+  background-color: var(--primary-color);
+  top: 15px;
+  left: 0;
+  transition: width 0.8s ease-in-out;
+}
+
+.progress-checkpoint {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transition: all 0.5s ease;
+}
+
+.checkpoint-diamond {
+  width: 12px;
+  height: 12px;
+  background-color: #e0e0e0;
+  transform: rotate(45deg);
+  margin-bottom: 8px;
+  transition: all 0.5s ease;
+}
+
+.progress-checkpoint.completed .checkpoint-diamond {
+  background-color: var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.2);
+}
+
+.progress-checkpoint.current .checkpoint-diamond {
+  background-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.2);
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(0, 123, 255, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 5px rgba(0, 123, 255, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 123, 255, 0);
+  }
+}
+
+.checkpoint-label {
+  font-size: 0.8rem;
+  color: #6c757d;
+  text-align: center;
+  max-width: 100px;
+  transition: all 0.5s ease;
+}
+
+.progress-checkpoint.completed .checkpoint-label {
+  color: var(--primary-color);
+  font-weight: 500;
+}
+
+.progress-checkpoint.current .checkpoint-label {
+  color: var(--primary-color);
+  font-weight: 600;
+}
+
+.progress-message {
+  text-align: center;
+  margin-top: 10px;
+  font-size: 0.9rem;
+  color: #6c757d;
+  font-style: italic;
+  min-height: 20px;
+  transition: all 0.5s ease;
 }

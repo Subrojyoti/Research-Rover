@@ -24,6 +24,26 @@ const SearchProgressBar = ({ currentStage, stages }) => {
             transition: 'width 0.8s ease-in-out'
           }}
         ></div>
+        <div 
+          className="rover-container"
+          style={{
+            position: 'absolute',
+            left: `${(currentStage / (stages.length - 1)) * 100}%`,
+            bottom: '0',
+            transform: 'translateX(-50%)',
+            transition: 'left 0.8s ease-in-out',
+            zIndex: 2
+          }}
+        >
+          <img 
+            src="/rover.png" 
+            alt="Rover" 
+            style={{
+              width: '40px',
+              height: 'auto'
+            }}
+          />
+        </div>
       </div>
     </div>
   );

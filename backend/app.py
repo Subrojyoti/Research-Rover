@@ -27,6 +27,7 @@ os.makedirs(DATA_FOLDER, exist_ok=True)
 # Global variable to track search progress
 search_progress = {
     "stage": 0,
+    "sub_stage": 0,
     "message": "Not started",
     "timestamp": time.time()
 }
@@ -49,7 +50,8 @@ def search():
         # Update progress - Stage 0: Starting search
         search_progress = {
             "stage": 0,
-            "message": "Searching for papers",
+            "sub_stage": 0,
+            "message": "Initializing search",
             "timestamp": time.time()
         }
 
@@ -66,7 +68,8 @@ def search():
         # Update progress - Stage 1: Processing results
         search_progress = {
             "stage": 1,
-            "message": "Processing search results",
+            "sub_stage": 0,
+            "message": "Querying CORE API",
             "timestamp": time.time()
         }
         
@@ -74,6 +77,7 @@ def search():
         if not results:
             search_progress = {
                 "stage": -1,
+                "sub_stage": 0,
                 "message": "No results found",
                 "timestamp": time.time()
             }
@@ -82,7 +86,8 @@ def search():
         # Update progress - Stage 2: Finding DOIs
         search_progress = {
             "stage": 2,
-            "message": "Finding DOIs and metadata",
+            "sub_stage": 0,
+            "message": "Extracting paper metadata",
             "timestamp": time.time()
         }
 
@@ -93,7 +98,8 @@ def search():
         # Update progress - Stage 3: Creating CSV
         search_progress = {
             "stage": 3,
-            "message": "Creating CSV file",
+            "sub_stage": 0,
+            "message": "Processing paper data",
             "timestamp": time.time()
         }
         
@@ -102,6 +108,7 @@ def search():
         # Update progress - Stage 4: Complete
         search_progress = {
             "stage": 4,
+            "sub_stage": 0,
             "message": "Search complete",
             "timestamp": time.time()
         }
@@ -126,6 +133,7 @@ def search():
         print(f"Search error: {str(e)}")
         search_progress = {
             "stage": -1,
+            "sub_stage": 0,
             "message": f"Error: {str(e)}",
             "timestamp": time.time()
         }

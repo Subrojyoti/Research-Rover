@@ -370,7 +370,7 @@ body {
   background-color: var(--primary-color);
   top: 15px;
   left: 0;
-  transition: width 0.8s ease-in-out;
+  transition: width 1.5s ease-in-out;
 }
 
 .progress-checkpoint {
@@ -378,7 +378,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  transition: all 0.5s ease;
+  transition: all 1s ease;
 }
 
 .checkpoint-diamond {
@@ -387,18 +387,19 @@ body {
   background-color: #e0e0e0;
   transform: rotate(45deg);
   margin-bottom: 8px;
-  transition: all 0.5s ease;
+  transition: all 1s ease;
 }
 
 .progress-checkpoint.completed .checkpoint-diamond {
   background-color: var(--primary-color);
   box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.2);
+  transition: all 1s ease;
 }
 
 .progress-checkpoint.current .checkpoint-diamond {
   background-color: var(--primary-color);
   box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.2);
-  animation: pulse 1.5s infinite;
+  animation: pulse 2s infinite;
 }
 
 @keyframes pulse {
@@ -418,17 +419,19 @@ body {
   color: #6c757d;
   text-align: center;
   max-width: 100px;
-  transition: all 0.5s ease;
+  transition: all 1s ease;
 }
 
 .progress-checkpoint.completed .checkpoint-label {
   color: var(--primary-color);
   font-weight: 500;
+  transition: all 1s ease;
 }
 
 .progress-checkpoint.current .checkpoint-label {
   color: var(--primary-color);
   font-weight: 600;
+  transition: all 1s ease;
 }
 
 .progress-message {
@@ -438,5 +441,5 @@ body {
   color: #6c757d;
   font-style: italic;
   min-height: 20px;
-  transition: all 0.5s ease;
+  transition: all 1s ease;
 }

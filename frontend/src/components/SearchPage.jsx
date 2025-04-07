@@ -64,10 +64,10 @@ const SearchPage = () => {
     
     // Define the stages of the search process
     const searchStages = [
-        { label: 'Searching Papers', description: 'Querying CORE API for research papers' },
-        { label: 'Processing Results', description: 'Extracting and validating paper information' },
-        { label: 'Finding DOIs', description: 'Locating Digital Object Identifiers' },
-        { label: 'Creating CSV', description: 'Compiling data into downloadable format' },
+        { label: 'Initializing', description: 'Setting up search environment' },
+        { label: 'Searching', description: 'Querying CORE API for research papers' },
+        { label: 'Processing', description: 'Extracting and validating paper information' },
+        { label: 'Compiling', description: 'Processing and organizing paper data' },
         { label: 'Complete', description: 'Search process finished' }
     ];
 
@@ -97,7 +97,7 @@ const SearchPage = () => {
                 } catch (err) {
                     console.error('Error fetching progress:', err);
                 }
-            }, 500); // Poll every 500ms
+            }, 1000); // Poll every 1 second instead of 500ms
         }
         
         return () => {

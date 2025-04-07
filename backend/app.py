@@ -6,6 +6,7 @@ import sys
 from features.search import search_works, extract_and_save_to_csv
 import shutil
 import re
+import time
 
 # Increase CSV field size limit
 maxInt = sys.maxsize
@@ -23,6 +24,13 @@ CORS(app)  # Enable CORS for frontend-backend communication
 DATA_FOLDER = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
 os.makedirs(DATA_FOLDER, exist_ok=True)
 
+# Global variable to track search progress
+search_progress = {
+    "stage": 0,
+    "message": "Not started",
+    "timestamp": time.time()
+}
+
 def sanitize_filename(filename):
     # Replace any non-alphanumeric characters (except spaces) with underscore
     return re.sub(r'[^a-zA-Z0-9\s]', '_', filename)
@@ -30,10 +38,20 @@ def sanitize_filename(filename):
 @app.route("/search", methods=["GET"])
 def search():
     try:
+        global search_progress
         query = request.args.get("query", "")
-        print(f"Received search query: {query}")
+        page = int(request.args.get("page", 1))
+        per_page = int(request.args.get("per_page", 10))
+        print(f"Received search query: {query}, page: {page}, per_page: {per_page}")
         if not query:
             return jsonify({"error": "Query parameter is required"}), 400
+
+        # Update progress - Stage 0: Starting search
+        search_progress = {
+            "stage": 0,
+            "message": "Searching for papers",
+            "timestamp": time.time()
+        }
 
         # Clear the data folder
         if os.path.exists(DATA_FOLDER):
@@ -45,29 +63,83 @@ def search():
                 except Exception as e:
                     print(f"Error clearing file: {e}")
 
+        # Update progress - Stage 1: Processing results
+        search_progress = {
+            "stage": 1,
+            "message": "Processing search results",
+            "timestamp": time.time()
+        }
+        
         results = search_works(query)
         if not results:
+            search_progress = {
+                "stage": -1,
+                "message": "No results found",
+                "timestamp": time.time()
+            }
             return jsonify({"error": "No results found"}), 404
+
+        # Update progress - Stage 2: Finding DOIs
+        search_progress = {
+            "stage": 2,
+            "message": "Finding DOIs and metadata",
+            "timestamp": time.time()
+        }
 
         # Sanitize the filename
         csv_filename = f'{re.sub(r"[^a-zA-Z0-9]", "_", query)}.csv'
         csv_path = os.path.join(DATA_FOLDER, csv_filename)
+        
+        # Update progress - Stage 3: Creating CSV
+        search_progress = {
+            "stage": 3,
+            "message": "Creating CSV file",
+            "timestamp": time.time()
+        }
+        
         extract_and_save_to_csv(results, csv_path)
 
-        # Return initial results immediately
+        # Update progress - Stage 4: Complete
+        search_progress = {
+            "stage": 4,
+            "message": "Search complete",
+            "timestamp": time.time()
+        }
+
+        # Calculate pagination
+        total_results = len(results)
+        total_pages = (total_results + per_page - 1) // per_page  # Ceiling division
+        start_idx = (page - 1) * per_page
+        end_idx = min(start_idx + per_page, total_results)
+        
+        # Return paginated results
         return jsonify({
-            "results": results[:min(10, len(results))],
+            "results": results[start_idx:end_idx],
             "csv_filename": csv_filename,
-            "total_results": len(results)
+            "total_results": total_results,
+            "current_page": page,
+            "total_pages": total_pages,
+            "per_page": per_page
         })
 
     except Exception as e:
         print(f"Search error: {str(e)}")
+        search_progress = {
+            "stage": -1,
+            "message": f"Error: {str(e)}",
+            "timestamp": time.time()
+        }
         return jsonify({"error": str(e)}), 500
+
+@app.route("/search_progress", methods=["GET"])
+def get_search_progress():
+    """Endpoint to get the current search progress"""
+    return jsonify(search_progress)
 
 @app.route("/download/<filename>")
 def download_csv(filename):
     try:
+        filename =f"_".join(filename.split("%20"))
         return send_from_directory(DATA_FOLDER, filename, as_attachment=True)
     except FileNotFoundError:
         return jsonify({"error": "File not found"}), 404
@@ -95,7 +167,8 @@ def get_csv_data(filename):
                         'source': str(row.get('Source', '')).strip() or 'Unknown',
                         'title': str(row.get('Title', '')).strip() or 'Unknown',
                         'download_url': str(row.get('Download_URL', '')).strip() or '',
-                        'year': str(row.get('Year_Published', '')).strip() or 'Unknown'
+                        'year': str(row.get('Year_Published', '')).strip() or 'Unknown',
+                        'keywords': str(row.get('Keywords', '')).strip() or '[]'
                     }
                     chunk.append(paper)
                     
@@ -116,6 +189,67 @@ def get_csv_data(filename):
                 
         print(f"Successfully processed {len(papers)} papers")
         return jsonify(papers)
+    except Exception as e:
+        print(f"Error processing CSV: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({"error": "Error processing CSV file"}), 500
+
+@app.route("/get_paginated_results", methods=["GET"])
+def get_paginated_results():
+    try:
+        csv_filename = request.args.get("filename", "")
+        page = int(request.args.get("page", 1))
+        per_page = int(request.args.get("per_page", 10))
+        
+        if not csv_filename:
+            return jsonify({"error": "Filename parameter is required"}), 400
+            
+        csv_path = os.path.join(DATA_FOLDER, csv_filename)
+        if not os.path.exists(csv_path):
+            print(f"CSV file not found: {csv_path}")
+            return jsonify({"error": "CSV file not found"}), 404
+
+        papers = []
+        print(f"Reading CSV file: {csv_path}")
+        
+        # Read CSV in chunks to handle large files
+        with open(csv_path, 'r', encoding='utf-8-sig') as file:
+            reader = csv.DictReader(file)
+            
+            for row in reader:
+                try:
+                    paper = {
+                        'source': str(row.get('Source', '')).strip() or 'Unknown',
+                        'title': str(row.get('Title', '')).strip() or 'Unknown',
+                        'download_url': str(row.get('Download_URL', '')).strip() or '',
+                        'year': str(row.get('Year_Published', '')).strip() or 'Unknown',
+                        'keywords': str(row.get('Keywords', '')).strip() or '[]'
+                    }
+                    papers.append(paper)
+                except Exception as row_error:
+                    print(f"Error processing row: {row} - Error: {str(row_error)}")
+                    continue
+                    
+        if not papers:
+            print("No valid papers found in CSV")
+            return jsonify({"error": "No valid data found in CSV"}), 404
+        
+        # Calculate pagination
+        total_results = len(papers)
+        total_pages = (total_results + per_page - 1) // per_page  # Ceiling division
+        start_idx = (page - 1) * per_page
+        end_idx = min(start_idx + per_page, total_results)
+        
+        # Return paginated results
+        return jsonify({
+            "results": papers[start_idx:end_idx],
+            "total_results": total_results,
+            "current_page": page,
+            "total_pages": total_pages,
+            "per_page": per_page
+        })
+                
     except Exception as e:
         print(f"Error processing CSV: {str(e)}")
         import traceback

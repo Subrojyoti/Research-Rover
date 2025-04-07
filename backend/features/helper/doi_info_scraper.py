@@ -1,103 +1,175 @@
+# helper/doi_info_scraper.py
 import requests
 import re
+import logging
 
-# Function to fetch BibTeX entry for a given DOI
-def fetch_bibtex(doi):
-    """Fetch BibTeX entry for a given DOI using DOI.org API."""
+# --- Configure Logging ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# --- Helper Function (moved from search.py for potential reuse) ---
+def _get_request(url, params=None, headers=None, timeout=15, session=None):
+    """Helper to perform GET request using session or default requests."""
+    requester = session if session else requests # Use passed session or default requests
+    try:
+        response = requester.get(url, params=params, headers=headers, timeout=timeout)
+        # Allow callers to handle status codes specifically
+        return response
+    except requests.exceptions.Timeout:
+        logging.warning(f"Request timed out: {url}")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Request Exception for {url}: {e}")
+    return None
+
+# --- BibTeX Fetching ---
+def fetch_bibtex(doi, session=None):
+    """Fetch BibTeX entry for a given DOI using DOI.org API, using provided session."""
+    if not doi:
+        return "Error: DOI is empty."
     url = f"https://doi.org/{doi}"
     headers = {"Accept": "application/x-bibtex"}
-    try:
-        response = requests.get(url, headers=headers)
+    logging.debug(f"Fetching BibTeX for DOI: {doi} from {url}")
+
+    response = _get_request(url, headers=headers, session=session)
+
+    if response:
         if response.status_code == 200:
-            return response.text
+            logging.debug(f"Successfully fetched BibTeX for DOI: {doi}")
+            # Decode response text, trying utf-8 first, then latin-1 as fallback
+            try:
+                return response.content.decode('utf-8')
+            except UnicodeDecodeError:
+                logging.warning(f"UTF-8 decode failed for BibTeX DOI {doi}, trying latin-1.")
+                try:
+                    return response.content.decode('latin-1')
+                except Exception as decode_err:
+                    logging.error(f"Could not decode BibTeX response for DOI {doi}: {decode_err}")
+                    return f"Error fetching DOI {doi}: Could not decode response content"
+        elif response.status_code == 404:
+            logging.warning(f"BibTeX not found (404) for DOI: {doi}")
+            return f"Error fetching DOI {doi}: Not Found (404)"
         else:
-            return f"Error fetching DOI {doi}: {response.status_code}"
-    except Exception as e:
-        return f"Error: {e}"
+            logging.error(f"Error fetching BibTeX for DOI {doi}: Status {response.status_code}")
+            return f"Error fetching DOI {doi}: Status {response.status_code}"
+    else:
+        # Error logged by _get_request
+        return f"Error fetching DOI {doi}: Request failed (see logs)"
 
-
+# --- BibTeX Parsing and Formatting ---
 def clean_pages_field(bibtex_entry):
-    """Fix encoding issues in the pages field."""
-    # Replace problematic characters in the pages field
-    fixed_entry = re.sub(r'â€“', '–', bibtex_entry)
+    """Fix common encoding issues in BibTeX fields, especially pages."""
+    if not isinstance(bibtex_entry, str):
+        return bibtex_entry
+    # Replace common mis-encoded en-dash variants with a standard en-dash
+    fixed_entry = bibtex_entry.replace('â€“', '–').replace('&#8211;', '–')
+    # Correct other potential issues if needed
+    # fixed_entry = fixed_entry.replace('Ã¤', 'ä') # Example for umlauts if needed
     return fixed_entry
+
 def bibtex_to_formatted_text(bibtex_entry):
-    """Convert a BibTeX entry to a formatted text citation, excluding unknown fields."""
+    """
+    Convert a BibTeX entry string to a formatted text citation and extract keywords.
+    Returns a tuple: (formatted_citation, keywords_list or None).
+    """
+    if not bibtex_entry or not isinstance(bibtex_entry, str) or bibtex_entry.startswith("Error"):
+        return "Citation information not available.", None
+
+    # Apply cleaning first
     bibtex_entry = clean_pages_field(bibtex_entry)
-    # Extract relevant information using regular expressions
-    author_match = re.search(r'author\s*=\s*\{([^}]+)\}', bibtex_entry)
-    title_match = re.search(r'title\s*=\s*\{([^}]+)\}', bibtex_entry)
-    year_match = re.search(r'year\s*=\s*\{([^}]+)\}', bibtex_entry)
-    doi_match = re.search(r'doi\s*=\s*\{([^}]+)\}', bibtex_entry)
-    journal_match = re.search(r'journal\s*=\s*\{([^}]+)\}', bibtex_entry)
-    volume_match = re.search(r'volume\s*=\s*\{([^}]+)\}', bibtex_entry)
-    number_match = re.search(r'number\s*=\s*\{([^}]+)\}', bibtex_entry)
-    pages_match = re.search(r'pages\s*=\s*\{([^}]+)\}', bibtex_entry)
-    month_match = re.search(r'month\s*=\s*\{([^}]+)\}', bibtex_entry)
-    keywords_match = re.search(r'keywords\s*=\s*\{([^}]+)\}', bibtex_entry)
 
-    # Extract values or set to None if not found
-    author = author_match.group(1) if author_match else None
-    title = title_match.group(1) if title_match else None
-    year = year_match.group(1) if year_match else None
-    doi = doi_match.group(1) if doi_match else None
-    journal = journal_match.group(1) if journal_match else None
-    volume = volume_match.group(1) if volume_match else None
-    number = number_match.group(1) if number_match else None
-    pages = pages_match.group(1) if pages_match else None
-    month = month_match.group(1) if month_match else None
-    keywords = keywords_match.group(1) if keywords_match else None
+    # Define patterns for extraction (case-insensitive for field names)
+    patterns = {
+        'author':   re.compile(r'author\s*=\s*[\{"]([^"}]+)[\}"]', re.IGNORECASE),
+        'title':    re.compile(r'title\s*=\s*[\{"]([^"}]+)[\}"]', re.IGNORECASE),
+        'year':     re.compile(r'year\s*=\s*[\{"]([^"}]+)[\}"]', re.IGNORECASE),
+        'doi':      re.compile(r'doi\s*=\s*[\{"]([^"}]+)[\}"]', re.IGNORECASE),
+        'journal':  re.compile(r'(?:journal|booktitle)\s*=\s*[\{"]([^"}]+)[\}"]', re.IGNORECASE), # Handle booktitle too
+        'volume':   re.compile(r'volume\s*=\s*[\{"]([^"}]+)[\}"]', re.IGNORECASE),
+        'number':   re.compile(r'number\s*=\s*[\{"]([^"}]+)[\}"]', re.IGNORECASE),
+        'pages':    re.compile(r'pages\s*=\s*[\{"]([^"}]+)[\}"]', re.IGNORECASE),
+        'month':    re.compile(r'month\s*=\s*[\{"]([^"}]+)[\}"]', re.IGNORECASE),
+        'keywords': re.compile(r'keywords\s*=\s*[\{"]([^"}]+)[\}"]', re.IGNORECASE),
+    }
 
-    # Format the author list
+    # Extract values
+    data = {}
+    for key, pattern in patterns.items():
+        match = pattern.search(bibtex_entry)
+        # Clean braces and potential leading/trailing whitespace from matched value
+        data[key] = match.group(1).replace('{','').replace('}','').strip() if match else None
+
+    # --- Format Citation ---
     authors_text = ""
-    if author:
-        author_list = author.split(' and ')
+    if data['author']:
+        # Simple author formatting (Last, F. M. and ...) - needs improvement for complex names
+        author_list = re.split(r'\s+and\s+', data['author']) # Split by ' and '
         formatted_authors = []
         for auth in author_list:
-            parts = auth.split(', ')
+            parts = auth.split(',') # Try splitting by comma (Last, First M.)
             if len(parts) == 2:
-                formatted_authors.append(f"{parts[0][0]}. {parts[1]}")
+                last_name = parts[0].strip()
+                first_names = parts[1].strip()
+                # Attempt to create initials (F. M.) - simplistic
+                initials = '. '.join(n[0] for n in first_names.split() if n) + '.' if first_names else ''
+                formatted_authors.append(f"{last_name}, {initials}")
             else:
-                formatted_authors.append(auth)
-        authors_text = ', '.join(formatted_authors)
+                 # If no comma, assume 'First M. Last' or just 'Name' - keep as is for now
+                 formatted_authors.append(auth.strip())
+        authors_text = ' and '.join(formatted_authors)
 
-    # Convert month abbreviation to capitalized format if available
+    # Format month
     month_dict = {
         'jan': 'Jan.', 'feb': 'Feb.', 'mar': 'Mar.', 'apr': 'Apr.',
-        'may': 'May', 'jun': 'June', 'jul': 'July', 'aug': 'Aug.',
-        'sep': 'Sept.', 'oct': 'Oct.', 'nov': 'Nov.', 'dec': 'Dec.'
+        'may': 'May', 'jun': 'Jun.', 'jul': 'Jul.', 'aug': 'Aug.',
+        'sep': 'Sep.', 'oct': 'Oct.', 'nov': 'Nov.', 'dec': 'Dec.'
     }
-    
-    month_formatted = month_dict.get(month.lower(), month.capitalize()) if month else ""
+    month_formatted = month_dict.get(data['month'].lower(), data['month'].capitalize()) if data['month'] else ""
 
-    # Construct the formatted citation, excluding unknown fields
+    # Construct citation parts, handling potential None values
     citation_parts = []
-    
-    if authors_text:
-        citation_parts.append(authors_text)
-    
-    if title:
-        citation_parts.append(f"\"{title}\"")  # Remove the comma here
-    
-    if journal:
-        citation_parts.append(f"in {journal}")
-    
-    if volume:
-        citation_parts.append(f"vol. {volume}")
-    
-    if number:
-        citation_parts.append(f"no. {number}")
-    
-    if pages:
-        citation_parts.append(f"pp. {pages}")
-    
-    if month_formatted and year:
-        citation_parts.append(f"{month_formatted} {year}")
-    elif year:  # If only year is available
-        citation_parts.append(year)
+    if authors_text: citation_parts.append(authors_text)
+    if data['year']: citation_parts.append(f"({data['year']})") # Year often in parentheses
+    if data['title']: citation_parts.append(f"\"{data['title']}\".") # Title in quotes, ending with period
+    if data['journal']: citation_parts.append(f"*{data['journal']}*") # Journal often italicized (using markdown *)
+    if data['volume']: citation_parts.append(f"vol. {data['volume']}")
+    if data['number']: citation_parts.append(f"no. {data['number']}")
+    if data['pages']: citation_parts.append(f"pp. {data['pages']}")
+    # Consider adding month if relevant (less common in standard citations)
+    # if month_formatted: citation_parts.append(f"{month_formatted}")
+    if data['doi']: citation_parts.append(f"doi:{data['doi']}")
 
-    if doi:
-        citation_parts.append(f"doi: {doi}")
+    # Join parts with appropriate separators (e.g., comma, period) - basic joining here
+    formatted_citation = ", ".join(part for part in citation_parts if part)
+    # Simple fix for potential double punctuation ".," -> "."
+    formatted_citation = formatted_citation.replace('.,', ',').replace('". ,', '".').replace('.) ,', ').')
 
-    # Join all parts together into a single string and ensure proper punctuation
-    return ", ".join(citation_parts) + ".", keywords
+
+    # --- Extract Keywords ---
+    keywords_list = None
+    if data['keywords']:
+        # Split by comma or semicolon, remove whitespace, filter empty strings
+        keywords_list = [kw.strip() for kw in re.split(r'[;,]', data['keywords']) if kw.strip()]
+
+    logging.debug(f"Parsed Citation: {formatted_citation}")
+    logging.debug(f"Parsed Keywords from BibTeX: {keywords_list}")
+
+    return formatted_citation, keywords_list
+
+# Example Usage (can be removed)
+# if __name__ == "__main__":
+#     test_doi = "10.1038/nature12373" # Example DOI
+#     print(f"Fetching BibTeX for {test_doi}...")
+#     bibtex = fetch_bibtex(test_doi)
+#     if bibtex and not bibtex.startswith("Error"):
+#         # print("\n--- Raw BibTeX ---")
+#         # print(bibtex)
+#         print("\n--- Formatted Citation & Keywords ---")
+#         citation, keywords = bibtex_to_formatted_text(bibtex)
+#         print("Citation:", citation)
+#         print("Keywords:", keywords)
+#     else:
+#         print(bibtex)
+
+#     test_doi_404 = "10.9999/invalid-doi-example"
+#     print(f"\nFetching BibTeX for {test_doi_404}...")
+#     bibtex_404 = fetch_bibtex(test_doi_404)
+#     print(bibtex_404)

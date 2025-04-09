@@ -80,15 +80,22 @@ core_session.headers.update(CORE_HEADERS)
 
 
 # --- CORE API Search (Modified to use Session) ---
-def search_works(query, limit=100, max_results=10):
+def search_works(query, limit=100, max_results=10, start_year=0, end_year=0):
     """Search for works using the CORE API with scrolling, session, and error handling."""
    
     results = []
     processed_ids = set() # Keep track of processed CORE IDs to avoid duplicates from scroll
     # URL encode the query parameter
+    
     encoded_query = urllib.parse.quote_plus(query)
+    if start_year > 0 or end_year > 0:
+        encoded_query = encoded_query + f" AND yearPublished>={start_year} AND yearPublished<={end_year}"
+    elif start_year > 0:
+        encoded_query = encoded_query + f" AND yearPublished>={start_year}"
+    elif end_year > 0:
+        encoded_query = encoded_query + f" AND yearPublished<={end_year}"
     initial_url = f"{CORE_API_ENDPOINT}search/works?q={encoded_query}&limit={limit}&scroll=true"
-    logging.info(f">>> Searching CORE for: '{query}' (Max results: {max_results})")
+    logging.info(f">>> Searching CORE for: '{query}' (Max results: {max_results}, Year range: {start_year}-{end_year})")
 
     try:
         response = core_session.get(initial_url) # Use the session
@@ -99,6 +106,7 @@ def search_works(query, limit=100, max_results=10):
         # Process initial batch
         batch_results = data.get("results", [])
         new_results = [r for r in batch_results if r.get('id') not in processed_ids]
+            
         results.extend(new_results)
         processed_ids.update(r.get('id') for r in new_results if r.get('id'))
         logging.info(f"Fetched initial {len(new_results)} results from CORE.")
@@ -111,7 +119,7 @@ def search_works(query, limit=100, max_results=10):
             # Ensure limit doesn't cause overshoot if close to max_results
             remaining_needed = max_results - len(results)
             current_limit = min(limit, remaining_needed)
-            if current_limit <= 0 or not continue_search: break # Should not happen with main check, but safeguard
+            if current_limit <= 0: break # Should not happen with main check, but safeguard
 
             scroll_url = f"{CORE_API_ENDPOINT}search/works?scrollId={scroll_id}&limit={current_limit}"
             # Consider a small delay if scrolling very rapidly, although session retry helps
@@ -346,5 +354,8 @@ def extract_and_save_to_csv(data, csv_file_name):
         logging.error(f"An unexpected error occurred during CSV writing: {e}", exc_info=True)
 
     return [] # Return empty list if saving failed
+
+
+
 
 

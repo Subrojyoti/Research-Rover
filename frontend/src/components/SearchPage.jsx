@@ -50,6 +50,9 @@ const ContentWrapper = styled(Box)({
 
 const SearchPage = () => {
     const [query, setQuery] = useState('');
+    const [maxResults, setMaxResults] = useState(10);
+    const [startYear, setStartYear] = useState(0);
+    const [endYear, setEndYear] = useState(0);
     const [papers, setPapers] = useState([]);
     const [loading, setLoading] = useState(false);
     const [csvLoading, setCsvLoading] = useState(false);
@@ -122,11 +125,16 @@ const SearchPage = () => {
         setProgressMessage('Starting search...');
         setCurrentPage(1); // Reset to first page on new search
         
+        // Ensure we have valid values for the parameters
+        const maxResultsValue = maxResults === "" ? 10 : maxResults;
+        const startYearValue = startYear === "" ? 0 : startYear;
+        const endYearValue = endYear === "" ? 0 : endYear;
+        
         try {
-            const searchResponse = await axios.get(`http://localhost:5000/search?query=${query}&page=1&per_page=${perPage}`);
+            const searchResponse = await axios.get(`http://localhost:5000/search?query=${query}&page=1&per_page=${perPage}&max_results=${maxResultsValue}&start_year=${startYearValue}&end_year=${endYearValue}`);
             const csvFilename = searchResponse.data.csv_filename;
             setCsvFilename(csvFilename);
-            setTotalResults(searchResponse.data.total_results || 0);
+            setTotalResults(searchResponse.data.total_results || 0)
             setTotalPages(searchResponse.data.total_pages || 1);
             setPapers(searchResponse.data.results.map(result => ({
                 source: result.dataProviders?.[0]?.name || 'Unknown',
@@ -271,68 +279,193 @@ const SearchPage = () => {
                         boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
                         borderRadius: '16px',
                         width: '90%',
-                        maxWidth: '600px',
+                        maxWidth: '800px',
                         border: '1px solid rgba(255, 255, 255, 0.2)',
                         transition: 'all 0.5s ease-in-out'
                     }}>
                         <form onSubmit={handleSearch} className="search-form" style={{
                             width: '100%'
                         }}>
-                            <div className="search-input-group" style={{
-                                position: 'relative',
+                            <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '10px',
                                 width: '100%'
                             }}>
-                                <input
-                                    type="text"
-                                    value={query}
-                                    onChange={(e) => setQuery(e.target.value)}
-                                    placeholder="Search for research papers..."
-                                    style={{
-                                        width: '100%',
-                                        padding: '10px 40px 10px 16px',
-                                        fontSize: '15px',
-                                        backgroundColor: 'rgba(255, 255, 255, 0.15)',
-                                        border: '1px solid rgba(255, 255, 255, 0.3)',
-                                        borderRadius: '25px',
-                                        outline: 'none',
-                                        transition: 'all 0.3s ease',
-                                        color: 'white',
-                                        caretColor: 'white'
-                                    }}
-                                    onFocus={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'}
-                                    onBlur={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.15)'}
-                                />
-                                <button 
-                                    type="submit"
-                                    disabled={loading}
-                                    style={{
-                                        position: 'absolute',
-                                        right: '5px',
-                                        top: '50%',
-                                        transform: 'translateY(-50%)',
-                                        background: 'none',
-                                        border: 'none',
-                                        cursor: 'pointer',
-                                        padding: '6px',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center'
-                                    }}
-                                >
-                                    <svg 
-                                        width="20" 
-                                        height="20" 
-                                        viewBox="0 0 24 24" 
-                                        fill="none" 
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        style={{ color: loading ? 'rgba(255, 255, 255, 0.5)' : 'white' }}
+                                <div className="search-input-group" style={{
+                                    position: 'relative',
+                                    flex: '1'
+                                }}>
+                                    <input
+                                        type="text"
+                                        value={query}
+                                        onChange={(e) => setQuery(e.target.value)}
+                                        placeholder="Search for research papers..."
+                                        style={{
+                                            width: '100%',
+                                            padding: '10px 40px 10px 16px',
+                                            fontSize: '15px',
+                                            backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                                            border: '1px solid rgba(255, 255, 255, 0.3)',
+                                            borderRadius: '25px',
+                                            outline: 'none',
+                                            transition: 'all 0.3s ease',
+                                            color: 'white',
+                                            caretColor: 'white'
+                                        }}
+                                        onFocus={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'}
+                                        onBlur={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.15)'}
+                                    />
+                                    <input
+                                        type="number"
+                                        value={maxResults}
+                                        onChange={(e) => {
+                                            const value = e.target.value;
+                                            // If the input is empty, set the state to 0 (or your desired default)
+                                            if (value === "") {
+                                                setMaxResults("");
+                                            } else {
+                                                const parsedValue = parseInt(value);
+                                                // Update the state only if the parsed value is a valid number
+                                                if (!isNaN(parsedValue) && parsedValue >=1) {
+                                                    setMaxResults(parsedValue);
+                                                }
+                                            }
+                                        }}
+                                        placeholder="Max Results"
+                                        min="1"
+                                        style={{
+                                            position: 'absolute',
+                                            right: '40px',
+                                            top: '50%',
+                                            transform: 'translateY(-50%)',
+                                            width: '120px',
+                                            padding: '8px',
+                                            fontSize: '14px',
+                                            backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                                            border: '1px solid rgba(255, 255, 255, 0.3)',
+                                            borderRadius: '15px',
+                                            outline: 'none',
+                                            transition: 'all 0.3s ease',
+                                            color: 'white',
+                                            caretColor: 'white',
+                                            textAlign: 'center',
+                                            height: '30px',
+                                            lineHeight: '1'
+                                        }}
+                                        onFocus={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'}
+                                        onBlur={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.15)'}
+                                    />
+                                    <button 
+                                        type="submit"
+                                        disabled={loading}
+                                        style={{
+                                            position: 'absolute',
+                                            right: '5px',
+                                            top: '50%',
+                                            transform: 'translateY(-50%)',
+                                            background: 'none',
+                                            border: 'none',
+                                            cursor: 'pointer',
+                                            padding: '6px',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center'
+                                        }}
                                     >
-                                        <path 
-                                            d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" 
-                                            fill="currentColor"
-                                        />
-                                    </svg>
-                                </button>
+                                        <svg 
+                                            width="20" 
+                                            height="20" 
+                                            viewBox="0 0 24 24" 
+                                            fill="none" 
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            style={{ color: loading ? 'rgba(255, 255, 255, 0.5)' : 'white' }}
+                                        >
+                                            <path 
+                                                d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" 
+                                                fill="currentColor"
+                                            />
+                                        </svg>
+                                    </button>
+                                </div>
+                                
+                                <div className="year-filters" style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '5px'
+                                }}>
+                                    {/* <label style={{
+                                        color: 'white',
+                                        fontSize: '14px'
+                                    }}>Year:</label> */}
+                                    <input
+                                        type="number"
+                                        value={startYear}
+                                        onChange={(e) => {
+                                            const value = e.target.value;
+                                            if (value === "") {
+                                                setStartYear("");
+                                            } else {
+                                                const parsedValue = parseInt(value);
+                                                if (!isNaN(parsedValue) && parsedValue >= 0) {
+                                                    setStartYear(parsedValue);
+                                                }
+                                            }
+                                        }}
+                                        placeholder="From"
+                                        min="0"
+                                        style={{
+                                            width: '70px',
+                                            padding: '8px',
+                                            fontSize: '14px',
+                                            backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                                            border: '1px solid rgba(255, 255, 255, 0.3)',
+                                            borderRadius: '15px',
+                                            outline: 'none',
+                                            transition: 'all 0.3s ease',
+                                            color: 'white',
+                                            caretColor: 'white',
+                                            textAlign: 'center'
+                                        }}
+                                        onFocus={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'}
+                                        onBlur={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.15)'}
+                                    />
+                                    <span style={{ color: 'white' }}>-</span>
+                                    <input
+                                        type="number"
+                                        value={endYear}
+                                        onChange={(e) => {
+                                            const value = e.target.value;
+                                            // If the input is empty, set the state to 0 (or your desired default)
+                                            if (value === "") {
+                                                setEndYear("");
+                                            } else {
+                                                const parsedValue = parseInt(value);
+                                                // Update the state only if the parsed value is a valid number
+                                                if (!isNaN(parsedValue && parsedValue >= 0)) {
+                                                    setEndYear(parsedValue);
+                                                }
+                                            }
+                                        }}
+                                        placeholder="To"
+                                        min="0"
+                                        style={{
+                                            width: '70px',
+                                            padding: '8px',
+                                            fontSize: '14px',
+                                            backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                                            border: '1px solid rgba(255, 255, 255, 0.3)',
+                                            borderRadius: '15px',
+                                            outline: 'none',
+                                            transition: 'all 0.3s ease',
+                                            color: 'white',
+                                            caretColor: 'white',
+                                            textAlign: 'center'
+                                        }}
+                                        onFocus={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'}
+                                        onBlur={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.15)'}
+                                    />
+                                </div>
                             </div>
                         </form>
 
@@ -491,7 +624,7 @@ const SearchPage = () => {
                                                 vertical: 'top',
                                                 horizontal: 'right',
                                             }}
-                                            PaperProps={{
+                                            componentsProps={{
                                                 style: {
                                                     backgroundColor: 'white',
                                                     borderRadius: '8px',

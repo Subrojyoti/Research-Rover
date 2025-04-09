@@ -44,7 +44,24 @@ def search():
         query = request.args.get("query", "")
         page = int(request.args.get("page", 1))
         per_page = int(request.args.get("per_page", 10))
-        print(f"Received search query: {query}, page: {page}, per_page: {per_page}")
+        
+        # Handle empty or invalid values for max_results, start_year, and end_year
+        try:
+            max_results = int(request.args.get("max_results", 10))
+        except (ValueError, TypeError):
+            max_results = 10
+            
+        try:
+            start_year = int(request.args.get("start_year", 0))
+        except (ValueError, TypeError):
+            start_year = 0
+            
+        try:
+            end_year = int(request.args.get("end_year", 0))
+        except (ValueError, TypeError):
+            end_year = 0
+            
+        print(f"Received search query: {query}, page: {page}, per_page: {per_page}, max_results: {max_results}, start_year: {start_year}, end_year: {end_year}")
         if not query:
             return jsonify({"error": "Query parameter is required"}), 400
 
@@ -74,7 +91,7 @@ def search():
             "timestamp": time.time()
         }
         
-        results = search_works(query)
+        results = search_works(query, max_results=max_results, start_year=start_year, end_year=end_year)
         if not results:
             search_progress = {
                 "stage": -1,
@@ -83,7 +100,7 @@ def search():
                 "timestamp": time.time()
             }
             return jsonify({"error": "No results found"}), 404
-
+        
         # Update progress - Stage 2: Finding DOIs
         search_progress = {
             "stage": 2,
@@ -104,7 +121,7 @@ def search():
             "timestamp": time.time()
         }
         
-        extract_and_save_to_csv(results, csv_path)
+        processed_results = extract_and_save_to_csv(results, csv_path)
 
         # Update progress - Stage 4: Complete
         search_progress = {
@@ -113,9 +130,8 @@ def search():
             "message": "Search complete",
             "timestamp": time.time()
         }
-
         # Calculate pagination
-        total_results = len(results)
+        total_results = len(processed_results)
         total_pages = (total_results + per_page - 1) // per_page  # Ceiling division
         start_idx = (page - 1) * per_page
         end_idx = min(start_idx + per_page, total_results)

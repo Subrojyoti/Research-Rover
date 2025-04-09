@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import SearchProgressBar from './SearchProgressBar';
-import { Box, styled } from '@mui/material';
+import { Box, styled, Menu, MenuItem } from '@mui/material';
 
 const BackgroundWrapper = styled(Box)({
   position: 'fixed',
@@ -61,6 +61,8 @@ const SearchPage = () => {
     const [currentPage, setCurrentPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
     const [perPage] = useState(10);
+    const [anchorEl, setAnchorEl] = useState(null);
+    const open = Boolean(anchorEl);
     
     // Define the stages of the search process
     const searchStages = [
@@ -162,11 +164,23 @@ const SearchPage = () => {
         }
     };
 
-    const handleDownload = () => {
-        const sanitizedQuery = sanitizeQuery(query);
-        console.log(query)
-        console.log(sanitizedQuery)
+    const handleDownloadClick = (event) => {
+        setAnchorEl(event.currentTarget);
+    };
+
+    const handleClose = () => {
+        setAnchorEl(null);
+    };
+
+    const handleDownloadCSV = () => {
+        handleClose();
         window.location.href = `http://localhost:5000/download/${csvFilename}`;
+    };
+
+    const handleDownloadPDFs = () => {
+        handleClose();
+        // Use the new endpoint to download PDFs as a zip file
+        window.location.href = `http://localhost:5000/download_pdfs/${csvFilename}`;
     };
 
     const handlePageChange = async (newPage) => {
@@ -429,7 +443,7 @@ const SearchPage = () => {
                                     </div>
                                     <div className="results-actions">
                                         <button
-                                            onClick={handleDownload}
+                                            onClick={handleDownloadClick}
                                             className="btn btn-secondary"
                                             style={{
                                                 display: 'flex',
@@ -460,8 +474,79 @@ const SearchPage = () => {
                                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                                                 <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="currentColor"/>
                                             </svg>
-                                            Download CSV
+                                            Download
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ marginLeft: '4px' }}>
+                                                <path d="M7 10l5 5 5-5z" fill="currentColor"/>
+                                            </svg>
                                         </button>
+                                        <Menu
+                                            anchorEl={anchorEl}
+                                            open={open}
+                                            onClose={handleClose}
+                                            anchorOrigin={{
+                                                vertical: 'bottom',
+                                                horizontal: 'right',
+                                            }}
+                                            transformOrigin={{
+                                                vertical: 'top',
+                                                horizontal: 'right',
+                                            }}
+                                            PaperProps={{
+                                                style: {
+                                                    backgroundColor: 'white',
+                                                    borderRadius: '8px',
+                                                    marginTop: '8px',
+                                                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                                                }
+                                            }}
+                                        >
+                                            <MenuItem 
+                                                onClick={handleDownloadCSV}
+                                                style={{
+                                                    padding: '10px 20px',
+                                                    fontSize: '14px',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '8px',
+                                                    color: '#2c3e50',
+                                                    transition: 'all 0.2s ease',
+                                                }}
+                                                onMouseOver={(e) => {
+                                                    e.target.style.backgroundColor = 'rgba(76, 175, 80, 0.1)';
+                                                }}
+                                                onMouseOut={(e) => {
+                                                    e.target.style.backgroundColor = 'transparent';
+                                                }}
+                                            >
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                    <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="#4CAF50"/>
+                                                </svg>
+                                                Download CSV
+                                            </MenuItem>
+                                            <MenuItem 
+                                                onClick={handleDownloadPDFs}
+                                                style={{
+                                                    padding: '10px 20px',
+                                                    fontSize: '14px',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '8px',
+                                                    color: '#2c3e50',
+                                                    transition: 'all 0.2s ease',
+                                                }}
+                                                onMouseOver={(e) => {
+                                                    e.target.style.backgroundColor = 'rgba(76, 175, 80, 0.1)';
+                                                }}
+                                                onMouseOut={(e) => {
+                                                    e.target.style.backgroundColor = 'transparent';
+                                                }}
+                                            >
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                    <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="#4CAF50"/>
+                                                </svg>
+                                                Download PDFs
+                                            </MenuItem>
+                                        </Menu>
                                         {csvLoading && (
                                             <span className="loading-indicator" style={{
                                                 color: '#2c3e50',

@@ -21,7 +21,6 @@ try:
     from .helper.keywords_scraper import get_keywords_for_doi
 except ImportError as e:
     print(f"Error importing helper modules: {e}")
-    print("Ensure helper/*.py files exist and helper is a package (contains __init__.py) or accessible.")
     # Optionally exit or raise error if helpers are critical
     exit(1)
 
@@ -45,6 +44,7 @@ CORE_HEADERS = {"Authorization": f"Bearer {CORE_API_KEY}"}
 # OPTIMIZATION: Define max workers for parallel processing
 # Adjust based on your machine, network, and API rate limits (start lower, e.g., 5-10)
 MAX_WORKERS = int(os.environ.get("MAX_WORKERS", 10)) # Allow overriding via env var
+
 
 
 # --- Session with Retries ---
@@ -80,8 +80,9 @@ core_session.headers.update(CORE_HEADERS)
 
 
 # --- CORE API Search (Modified to use Session) ---
-def search_works(query, limit=200, max_results=20):
+def search_works(query, limit=100, max_results=10):
     """Search for works using the CORE API with scrolling, session, and error handling."""
+   
     results = []
     processed_ids = set() # Keep track of processed CORE IDs to avoid duplicates from scroll
     # URL encode the query parameter
@@ -110,7 +111,7 @@ def search_works(query, limit=200, max_results=20):
             # Ensure limit doesn't cause overshoot if close to max_results
             remaining_needed = max_results - len(results)
             current_limit = min(limit, remaining_needed)
-            if current_limit <= 0: break # Should not happen with main check, but safeguard
+            if current_limit <= 0 or not continue_search: break # Should not happen with main check, but safeguard
 
             scroll_url = f"{CORE_API_ENDPOINT}search/works?scrollId={scroll_id}&limit={current_limit}"
             # Consider a small delay if scrolling very rapidly, although session retry helps
@@ -129,6 +130,8 @@ def search_works(query, limit=200, max_results=20):
                 # Log specific error but attempt to continue if possible (though unlikely)
                 logging.warning(f"CORE scroll request failed with status {response.status_code}. Response: {response.text}. Stopping scroll.")
                 break # Stop scrolling on error
+            
+            
 
     except requests.exceptions.HTTPError as e:
          logging.error(f"CORE API HTTP Error: {e.response.status_code} - {e.response.text}")

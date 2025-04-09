@@ -1,9 +1,10 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, send_file
 from flask_cors import CORS
 import os
 import csv
 import sys
 from features.search import search_works, extract_and_save_to_csv
+from features.download_pdfs import download_pdfs_from_csv
 import shutil
 import re
 import time
@@ -263,6 +264,37 @@ def get_paginated_results():
         import traceback
         print(traceback.format_exc())
         return jsonify({"error": "Error processing CSV file"}), 500
+
+@app.route("/download_pdfs/<filename>")
+def download_pdfs(filename):
+    try:
+        # Get the CSV file path
+        csv_file_path = os.path.join(DATA_FOLDER, filename)
+        
+        if not os.path.exists(csv_file_path):
+            return jsonify({"error": "CSV file not found"}), 404
+            
+        # Create a unique zip filename based on the CSV filename
+        zip_filename = f"{os.path.splitext(filename)[0]}_pdfs.zip"
+        zip_path = os.path.join(DATA_FOLDER, zip_filename)
+        
+        # Download PDFs and create zip file
+        download_pdfs_from_csv(csv_file_path, zip_path)
+        
+        if not os.path.exists(zip_path):
+            return jsonify({"error": "Failed to create zip file"}), 500
+            
+        # Send the zip file
+        return send_file(
+            zip_path,
+            as_attachment=True,
+            download_name=zip_filename,
+            mimetype='application/zip'
+        )
+        
+    except Exception as e:
+        app.logger.error(f"Error downloading PDFs: {str(e)}")
+        return jsonify({"error": "Failed to download PDFs"}), 500
 
 if __name__ == "__main__":
     app.run(debug=True)

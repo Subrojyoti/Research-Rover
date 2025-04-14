@@ -3,12 +3,17 @@ from flask_cors import CORS
 import os
 import csv
 import sys
+import json
 from features.search import search_works, extract_and_save_to_csv
 from features.download_pdfs import download_pdfs_from_csv
-import shutil
+from features.embedding_and_indexing import process_data_generate_vectors_and_metadata, build_faiss_index, save_metadata_list, save_doi_mapped_json, search_faiss
+from sentence_transformers import SentenceTransformer
+import faiss
 import re
 import time
 
+
+from utils.llm_setup import llm_instance as llm
 # Increase CSV field size limit
 maxInt = sys.maxsize
 while True:
@@ -33,10 +38,18 @@ search_progress = {
     "timestamp": time.time()
 }
 
+# Global variable to track embedding progress
+embedding_progress = {
+    "stage": 0,
+    "message": "Not started",
+    "timestamp": time.time()
+}
+
 def sanitize_filename(filename):
     # Replace any non-alphanumeric characters (except spaces) with underscore
     return re.sub(r'[^a-zA-Z0-9\s]', '_', filename)
 
+# --- Search Endpoint ---
 @app.route("/search", methods=["GET"])
 def search():
     try:
@@ -161,6 +174,12 @@ def get_search_progress():
     """Endpoint to get the current search progress"""
     return jsonify(search_progress)
 
+@app.route("/embedding_progress", methods=["GET"])
+def get_embedding_progress():
+    """Endpoint to get the current embedding progress"""
+    return jsonify(embedding_progress)
+
+# --- Download CSV Endpoint ---
 @app.route("/download/<filename>")
 def download_csv(filename):
     try:
@@ -169,6 +188,7 @@ def download_csv(filename):
     except FileNotFoundError:
         return jsonify({"error": "File not found"}), 404
 
+# --- Get CSV Data Endpoint ---
 @app.route("/get_csv_data/<filename>")
 def get_csv_data(filename):
     try:
@@ -220,6 +240,7 @@ def get_csv_data(filename):
         print(traceback.format_exc())
         return jsonify({"error": "Error processing CSV file"}), 500
 
+# --- Get Paginated Results Endpoint ---
 @app.route("/get_paginated_results", methods=["GET"])
 def get_paginated_results():
     try:
@@ -281,6 +302,7 @@ def get_paginated_results():
         print(traceback.format_exc())
         return jsonify({"error": "Error processing CSV file"}), 500
 
+# --- Download PDFs Endpoint ---
 @app.route("/download_pdfs/<filename>")
 def download_pdfs(filename):
     try:
@@ -311,6 +333,188 @@ def download_pdfs(filename):
     except Exception as e:
         app.logger.error(f"Error downloading PDFs: {str(e)}")
         return jsonify({"error": "Failed to download PDFs"}), 500
+
+# --- Create Embedding Endpoint & Build FAISS Index Endpoint ---
+@app.route("/create_embedding/<filename>")
+def create_embedding_and_build_faiss_index(filename):
+    try:
+        global embedding_progress
+        # Load data from CSV file
+        csv_path = os.path.join(DATA_FOLDER, filename)
+        if not os.path.exists(csv_path):
+            return jsonify({"error": "CSV file not found"}), 404
+        embedding_progress = {
+            "stage": 0,
+            "message": "Loading data and initializing embedding model",
+            "timestamp": time.time()
+        }
+        
+        JSON_DOI_MAPPED_FILE = filename.replace(".csv", "_paper_data_doi_mapped_hdbscan.json")
+        JSON_DOI_MAPPED_FILE_PATH = os.path.join(DATA_FOLDER, JSON_DOI_MAPPED_FILE)
+
+        METADATA_FILE = filename.replace(".csv", "_paper_chunk_metadata_hdbscan.json")
+        METADATA_FILE_PATH = os.path.join(DATA_FOLDER, METADATA_FILE)
+
+        FAISS_INDEX_FILE = filename.replace(".csv", "_paper_chunks_hdbscan.index")
+        FAISS_INDEX_FILE_PATH = os.path.join(DATA_FOLDER, FAISS_INDEX_FILE)
+
+        # Check if all files exist
+        if os.path.exists(FAISS_INDEX_FILE_PATH) and os.path.exists(METADATA_FILE_PATH) and os.path.exists(JSON_DOI_MAPPED_FILE_PATH):
+            embedding_progress = {
+                "stage": 3,
+                "message": "Embeddings already exist",
+                "timestamp": time.time()
+            }
+            return jsonify({"message": "All files already exist"}), 200
+
+        # --- EMBEDDING_MODEL ---
+        EMBEDDING_MODEL = 'all-mpnet-base-v2'
+        embedding_progress = {
+            "stage": 1,
+            "message": "Loading embedding model",
+            "timestamp": time.time()
+        }
+        try:
+            sentence_model = SentenceTransformer(EMBEDDING_MODEL)
+        except Exception as e:
+            embedding_progress = {
+                "stage": -1,
+                "message": "Failed to load embedding model",
+                "timestamp": time.time()
+            }
+            return jsonify({"error": "Failed to load embedding model"}), 500
+
+        embedding_progress = {
+            "stage": 2,
+            "message": "Processing data and generating embeddings",
+            "timestamp": time.time()
+        }
+        
+        # Use HDBSCAN chunking + split oversized chunks
+        all_vectors, all_chunk_metadata = process_data_generate_vectors_and_metadata(csv_path, sentence_model)
+        if all_vectors is None or all_chunk_metadata is None:
+            embedding_progress = {
+                "stage": -1,
+                "message": "Failed to process data",
+                "timestamp": time.time()
+            }
+            return jsonify({"error": "Failed to process data"}), 500
+        # Build FAISS index
+        faiss_index = build_faiss_index(all_vectors)
+        if faiss_index is None:
+            embedding_progress = {
+                "stage": -1,
+                "message": "Failed to build FAISS index",
+                "timestamp": time.time()
+            }
+            return jsonify({"error": "Failed to build FAISS index"}), 500
+        if faiss_index:
+            try:
+                faiss.write_index(faiss_index, FAISS_INDEX_FILE_PATH)
+            except Exception as e:
+                embedding_progress = {
+                    "stage": -1,
+                    "message": "Failed to save FAISS index",
+                    "timestamp": time.time()
+                }
+                return jsonify({"error": "Failed to save FAISS index"}), 500
+        if all_chunk_metadata:
+            save_metadata_list(all_chunk_metadata, METADATA_FILE_PATH)
+            save_doi_mapped_json(all_chunk_metadata, JSON_DOI_MAPPED_FILE_PATH)
+        print(f"Metadata saved")
+        embedding_progress = {
+            "stage": 3,
+            "message": "Embeddings created successfully",
+            "timestamp": time.time()
+        }
+        return jsonify({"message": "Embeddings created successfully"}), 200
+        
+    except Exception as e:
+        embedding_progress = {
+            "stage": -1,
+            "message": f"Error: {str(e)}",
+            "timestamp": time.time()
+        }
+        return jsonify({"error": str(e)}), 500
+   
+        
+# --- Chat Conversation Endpoint ---
+@app.route("/chat_conversation/<filename>", methods=["POST"])
+def chat_conversation(filename):
+    # try:
+    data = request.json
+    query = data.get("query", "")
+    if not query:
+        return jsonify({"error": "Query parameter is required"}), 400
+    filename = filename.replace(".csv", "")
+    FAISS_INDEX_FILE = f"{filename}_paper_chunks_hdbscan.index"
+    FAISS_INDEX_FILE_PATH = os.path.join(DATA_FOLDER, FAISS_INDEX_FILE)
+    app.logger.info(f"FAISS_INDEX_FILE_PATH: {FAISS_INDEX_FILE_PATH}")
+    METADATA_FILE = f"{filename}_paper_chunk_metadata_hdbscan.json"
+    METADATA_FILE_PATH = os.path.join(DATA_FOLDER, METADATA_FILE)
+    app.logger.info(f"METADATA_FILE_PATH: {METADATA_FILE_PATH}")
+    EMBEDDING_MODEL = 'all-mpnet-base-v2'
+    sentence_model = SentenceTransformer(EMBEDDING_MODEL)
+
+    if FAISS_INDEX_FILE_PATH and METADATA_FILE_PATH and sentence_model:
+        if llm is None:
+            app.logger.error("LLM instance is None. Chat functionality will not work.")
+            return jsonify({"error": "LLM instance is not initialized."}), 500
+        
+        try:
+            faiss_index = faiss.read_index(FAISS_INDEX_FILE_PATH)
+            with open(METADATA_FILE_PATH, 'r', encoding='utf-8') as f: all_chunk_metadata = json.load(f)
+        except Exception as e:
+            return jsonify({"error": "Failed to load metadata file"}), 500
+        
+        search_results = search_faiss(query, sentence_model, faiss_index, all_chunk_metadata, k= 5)
+        if search_results:
+            app.logger.info(f"Search results found: {len(search_results)}")
+            llm_context_string = "" # prepare context string for LLM use
+            for i, result in enumerate(search_results):
+                llm_context_string += f"[Source DOI: {result.get('doi', 'N/A')}, Title: {result.get('paperTitle', 'N/A')}]\n"
+                llm_context_string += f"Chunk {i+1}: {result.get('text', '')}\n---\n"
+
+            # llm prompt
+            llm_prompt = f"""
+            Your task is to answer the following question based ONLY on the context documents provided below.
+
+            Instructions:
+            - Answer the question solely using the information present in the 'Context Documents' section.
+            - Do not use any external knowledge or prior assumptions.
+            - Clearly define any pronouns (e.g. it, they must be refered to the one clearly refered with names/entities).
+            - If the answer cannot be found within the provided context, explicitly state "I cannot answer the question based on the provided context."
+            - Be concise and directly address the question.
+
+            Context Documents: 
+            {llm_context_string}
+
+            Question: 
+            {query}
+
+            Answer:
+            """
+
+            # Call LLM
+            # try:
+            llm_response = llm.generate_content(llm_prompt)
+            app.logger.info(f"LLM response: {llm_response.text}")
+            return jsonify({"answer": llm_response.text})
+            # except Exception as e:
+            #     return jsonify({"error": "Failed to generate response"}), 500
+                
+    # except Exception as e:
+    #     app.logger.error(f"Error in chat_conversation for {filename}: {e}", exc_info=True)
+    #     return jsonify({"error": "Failed to chat conversation"}), 500
+        
+        
+        
+        
+        
+        
+        
+    
+        
 
 if __name__ == "__main__":
     app.run(debug=True)

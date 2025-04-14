@@ -41,13 +41,13 @@ const ContentWrapper = styled(Box)({
 
 // Add scrollbar styling
 const CustomScrollbar = {
-    '&::-webkit-scrollbar': {
+    '&::WebkitScrollbar': {
         width: '6px',
     },
-    '&::-webkit-scrollbar-track': {
+    '&::WebkitScrollbarTrack': {
         background: 'rgba(18, 18, 18, 0.95)',
     },
-    '&::-webkit-scrollbar-thumb': {
+    '&::WebkitScrollbarThumb': {
         background: 'rgba(76, 175, 80, 0.5)',
         borderRadius: '3px',
         '&:hover': {
@@ -85,6 +85,24 @@ const LoadingDots = () => {
             </style>
         </div>
     );
+};
+
+const TypeWriter = ({ text, speed = 10 }) => {
+    const [displayedText, setDisplayedText] = useState('');
+    const [currentIndex, setCurrentIndex] = useState(0);
+
+    useEffect(() => {
+        if (currentIndex < text.length) {
+            const timer = setTimeout(() => {
+                setDisplayedText(prev => prev + text[currentIndex]);
+                setCurrentIndex(currentIndex + 1);
+            }, speed);
+
+            return () => clearTimeout(timer);
+        }
+    }, [currentIndex, text, speed]);
+
+    return <>{displayedText}</>;
 };
 
 const ChatPage = () => {
@@ -248,7 +266,7 @@ const ChatPage = () => {
                                                 ? '1px solid rgba(76, 175, 80, 0.5)'
                                                 : '1px solid rgba(255, 255, 255, 0.1)',
                                         }}>
-                                            {message.text}
+                                            {message.isUser ? message.text : <TypeWriter text={message.text} speed={5} />}
                                         </div>
                                     )}
                                     {message.isUser && (
@@ -308,10 +326,10 @@ const ChatPage = () => {
                                         minHeight: '46px',
                                         overflowY: 'auto',
                                         scrollbarWidth: 'none',
-                                        '&::-webkit-scrollbar': {
+                                        '&::WebkitScrollbar': {
                                             display: 'none',
                                         },
-                                        '-ms-overflow-style': 'none',
+                                        msOverflowStyle: 'none',
                                     }}
                                 />
                                 <button

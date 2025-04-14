@@ -13,8 +13,10 @@ import '@fontsource/space-grotesk/700.css';
 import theme from './theme';
 import HomePage from './pages/HomePage';
 import SearchPage from './components/SearchPage';
+import ChatPage from './components/ChatPage';
 import Footer from './components/Footer';
 import './App.css';
+
 
 function App() {
     return (
@@ -32,6 +34,7 @@ function App() {
                         <Routes>
                             <Route path="/" element={<HomePage />} />
                             <Route path="/search" element={<SearchPage />} />
+                            <Route path="/search/chat" element={<ChatPage/>} />
                         </Routes>
                     </Box>
                     <Footer />

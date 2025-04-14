@@ -3,6 +3,7 @@ import axios from 'axios';
 import { useLocation } from 'react-router-dom';
 import { Box, styled } from '@mui/material';
 
+
 const BackgroundWrapper = styled(Box)({
     position: 'fixed',
     top: 0,
@@ -55,11 +56,42 @@ const CustomScrollbar = {
     }
 };
 
+// Add loadingdots animation
+const LoadingDots = () => {
+    return (
+        <div style={{
+            display: 'flex',
+            gap: '4px',
+            padding: '8px 16px',
+            alignItems: 'center'
+        }}>
+            {[1, 2, 3].map((dot) => (
+                <div key={dot} style={{
+                    width: '6px',
+                    height: '6px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.7)',
+                    borderRadius: '50%',
+                    animation: `bounce 1.2s infinite ease-in-out`,
+                    animationDelay: `${(dot - 1) * 0.16}s`
+                    }} />
+            ))}
+            <style>
+                {`
+                    @keyframes bounce {
+                        0%, 80%, 100% { transform: translateY(0); }
+                        40% { transform: translateY(-6px); }
+                    }
+                `}
+            </style>
+        </div>
+    );
+};
+
 const ChatPage = () => {
     const [messages, setMessages] = useState([]);
     const [inputMessage, setInputMessage] = useState('');
     const [loading, setLoading] = useState(false);
-    
+    const [currentStage, setCurrentStage] = useState(0);
     const [error, setError] = useState(null);
     const messagesEndRef = useRef(null);
     const location = useLocation();
@@ -87,7 +119,12 @@ const ChatPage = () => {
 
         const userMessage = inputMessage;
         setInputMessage('');
+        // Add user message to chat
         setMessages(prev => [...prev, { text: userMessage, isUser: true }]);
+
+        // Set loading state and current stage
+        setMessages(prev => [...prev, { text: "", isUser: false, isloading: true }]);
+
         setLoading(true);
         setCurrentStage(0);
 
@@ -96,9 +133,11 @@ const ChatPage = () => {
                 query: userMessage
             });
 
-            setMessages(prev => [...prev, { text: response.data.answer, isUser: false }]);
+            setMessages(prev => [...prev.slice(0, -1), { text: response.data.answer, isUser: false }]);
             setCurrentStage(3);
         } catch (err) {
+            // Remove loading message if error occurs
+            setMessages(prev => prev.slice(0, -1));
             setError('Failed to get response');
             console.error('Chat error:', err);
         } finally {
@@ -180,38 +219,43 @@ const ChatPage = () => {
                                     }}
                                 >
                                     {!message.isUser && (
-                                        <img
-                                            src="/rover.png"
-                                            alt="AI"
-                                            style={{
-                                                width: '42px',
-                                                height: '42px',
-                                                borderRadius: '12px',
-                                                objectFit: 'cover',
-                                            }}
-                                        />
+                                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1rem' }}>
+                                            <img
+                                                src="/rover.png"
+                                                alt="AI"
+                                                style={{
+                                                    width: '42px',
+                                                    height: '42px',
+                                                    borderRadius: '12px',
+                                                    objectFit: 'cover',
+                                                }}
+                                            />
+                                            {message.isloading && <LoadingDots />}
+                                        </div>   
                                     )}
-                                    <div style={{
-                                        backgroundColor: message.isUser 
-                                            ? 'rgba(18, 18, 18, 0.95)'
-                                            : 'rgba(255, 255, 255, 0.08)',
-                                        padding: '1.2rem 1.4rem',
-                                        borderRadius: '16px',
-                                        color: 'white',
-                                        fontSize: '0.95rem',
-                                        lineHeight: '1.6',
-                                        fontFamily: '"Inter", sans-serif',
-                                        border: message.isUser 
-                                            ? '1px solid rgba(76, 175, 80, 0.5)'
-                                            : '1px solid rgba(255, 255, 255, 0.1)',
-                                    }}>
-                                        {message.text}
-                                    </div>
+                                    {!message.isloading && (
+                                        <div style={{
+                                            backgroundColor: message.isUser 
+                                                ? 'rgba(18, 18, 18, 0.95)'
+                                                : 'rgba(255, 255, 255, 0.08)',
+                                            padding: '1.2rem 1.4rem',
+                                            borderRadius: '16px',
+                                            color: 'white',
+                                            fontSize: '0.95rem',
+                                            lineHeight: '1.6',
+                                            fontFamily: '"Inter", sans-serif',
+                                            border: message.isUser 
+                                                ? '1px solid rgba(76, 175, 80, 0.5)'
+                                                : '1px solid rgba(255, 255, 255, 0.1)',
+                                        }}>
+                                            {message.text}
+                                        </div>
+                                    )}
                                     {message.isUser && (
                                         <div style={{
                                             width: '42px',
                                             height: '42px',
-                                            borderRadius: '12px',
+                                            borderRadius: '16px',
                                             backgroundColor: 'rgba(76, 175, 80, 0.2)',
                                             display: 'flex',
                                             alignItems: 'center',
@@ -236,18 +280,19 @@ const ChatPage = () => {
                         }}>
                             <div style={{
                                 display: 'flex',
-                                alignItems: 'center',
+                                alignItems: 'flex-end',
                                 gap: '0.8rem',
                                 backgroundColor: 'rgba(28, 28, 28, 0.95)',
                                 borderRadius: '12px',
                                 padding: '0.4rem',
                                 border: '1px solid rgba(255, 255, 255, 0.1)',
                             }}>
-                                <input
+                                <textarea
                                     type="text"
                                     value={inputMessage}
                                     onChange={(e) => setInputMessage(e.target.value)}
                                     placeholder="Ask your query..."
+                                    rows={1}
                                     style={{
                                         flex: 1,
                                         padding: '0.8rem 1.2rem',
@@ -258,6 +303,15 @@ const ChatPage = () => {
                                         color: 'white',
                                         fontFamily: '"Inter", sans-serif',
                                         caretColor: '#4CAF50',
+                                        resize: 'none',
+                                        maxHeight: '120px',
+                                        minHeight: '46px',
+                                        overflowY: 'auto',
+                                        scrollbarWidth: 'none',
+                                        '&::-webkit-scrollbar': {
+                                            display: 'none',
+                                        },
+                                        '-ms-overflow-style': 'none',
                                     }}
                                 />
                                 <button

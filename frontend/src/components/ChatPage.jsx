@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { useLocation } from 'react-router-dom';
-import { Box, styled } from '@mui/material';
+import { Box, styled, keyframes } from '@mui/material';
 
 
 const BackgroundWrapper = styled(Box)({
@@ -39,21 +39,31 @@ const ContentWrapper = styled(Box)({
     },
 });
 
+
+
 // Add scrollbar styling
 const CustomScrollbar = {
     '&::WebkitScrollbar': {
         width: '6px',
+        background: 'traparent',
     },
     '&::WebkitScrollbarTrack': {
-        background: 'rgba(18, 18, 18, 0.95)',
+        background: 'rgba(0, 0, 0, 0.2)',
+        backdropFilter: 'blur(8px)',
+        borderRadius: '10px',
+        margin: '4px',
     },
     '&::WebkitScrollbarThumb': {
-        background: 'rgba(76, 175, 80, 0.5)',
-        borderRadius: '3px',
+        background: 'rgba(0, 0, 0, 0.6)',
+        backdropFilter: 'blur(10px)',
+        border: '1px solid rgba(255, 255, 255, 0.1)',
+        borderRadius: '10px',
         '&:hover': {
-            background: 'rgba(76, 175, 80, 0.7)',
+            background: 'rgba(0, 0, 0, 0.8)',
         }
-    }
+    },
+    scrollbarWidth: 'thin',
+    scrollbarColor: 'rgba(0, 0, 0, 0.6) rgba(0, 0, 0, 0.2)',
 };
 
 // Add loadingdots animation
@@ -105,26 +115,51 @@ const TypeWriter = ({ text, speed = 10 }) => {
     return <>{displayedText}</>;
 };
 
+const fadeIn = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(-50%) translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+`;
+
 const ChatPage = () => {
     const [messages, setMessages] = useState([]);
     const [inputMessage, setInputMessage] = useState('');
     const [loading, setLoading] = useState(false);
     const [currentStage, setCurrentStage] = useState(0);
     const [error, setError] = useState(null);
+    // const [copiedMessageId, setCopiedMessageId] = useState(null);
+    const [editingMessageId, setEditingMessageId] = useState(null);
+    const [copyingStates, setCopyingStates] = useState({});
     const messagesEndRef = useRef(null);
     const location = useLocation();
     const queryParams = new URLSearchParams(location.search);
     const filename = queryParams.get('filename');
 
-    const chatStages = [
-        { label: 'Processing', description: 'Processing your message' },
-        { label: 'Searching', description: 'Searching relevant context' },
-        { label: 'Generating', description: 'Generating response' },
-        { label: 'Complete', description: 'Response ready' }
-    ];
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    };
+
+    const handleCopyText = async (text, messageId) => {
+        try {
+            await navigator.clipboard.writeText(text);
+            setCopyingStates(prev => ({ ...prev, [messageId]: true }));
+            setTimeout(() => {
+                setCopyingStates(prev => ({ ...prev, [messageId]: false }));
+            }, 2000); // Message disappears after 2 seconds
+        } catch (err) {
+            console.error("Failed to copy text:", err)
+        }
+    };
+
+    const handleEditMessage = (text, messageId) => {
+        setInputMessage(text);
+        setEditingMessageId(messageId);
     };
 
     useEffect(() => {
@@ -137,29 +172,85 @@ const ChatPage = () => {
 
         const userMessage = inputMessage;
         setInputMessage('');
-        // Add user message to chat
-        setMessages(prev => [...prev, { text: userMessage, isUser: true }]);
 
-        // Set loading state and current stage
-        setMessages(prev => [...prev, { text: "", isUser: false, isloading: true }]);
+        if(editingMessageId != null){
+            setMessages(prev => {
+                const newMessages = [...prev];
 
-        setLoading(true);
-        setCurrentStage(0);
+                // update the edited user message
+                newMessages[editingMessageId] = { ...newMessages[editingMessageId], text: userMessage};
 
-        try {
-            const response = await axios.post(`http://localhost:5000/chat_conversation/${filename}`, {
-                query: userMessage
+                // Remove the old AI response that comes after the edited message
+                if(!newMessages[editingMessageId + 1]?.isUser){
+                    newMessages.splice(editingMessageId + 1, 1);
+                }
+
+                // Add loading message
+                newMessages.splice(editingMessageId + 1, 0, {
+                    text: "",
+                    isUser: false,
+                    isloading: true
+                });
+
+                return newMessages;
             });
 
-            setMessages(prev => [...prev.slice(0, -1), { text: response.data.answer, isUser: false }]);
-            setCurrentStage(3);
-        } catch (err) {
-            // Remove loading message if error occurs
-            setMessages(prev => prev.slice(0, -1));
-            setError('Failed to get response');
-            console.error('Chat error:', err);
-        } finally {
-            setLoading(false);
+            setLoading(true);
+            setCurrentStage(0);
+
+            try {
+                const response = await axios.post(`http://localhost:5000/chat_conversation/${filename}`, {
+                    query: userMessage
+                });
+    
+                setMessages(prev => {
+                    const newMessages = [...prev];
+                    // Replace loading message with new response
+                    const nextMessageIndex = editingMessageId + 1;
+                    newMessages[nextMessageIndex] = { text: response.data.answer, isUser: false };
+                    return newMessages;
+                });
+                setCurrentStage(3);
+            } catch (err) {
+                // Remove loading message if error occurs
+                setMessages(prev => {
+                    const newMessages = [...prev];
+                    const nextMessageIndex = editingMessageId + 1;
+                    newMessages.splice(nextMessageIndex, 1);
+                    return newMessages;
+                });
+                setError('Failed to get response');
+                console.error('Chat error:', err);
+            } finally {
+                setLoading(false);
+                setEditingMessageId(null);
+            }
+        } 
+        else{
+        // Add user message to chat
+            setMessages(prev => [...prev, { text: userMessage, isUser: true }]);
+
+            // Set loading state and current stage
+            setMessages(prev => [...prev, { text: "", isUser: false, isloading: true }]);
+
+            setLoading(true);
+            setCurrentStage(0);
+
+            try {
+                const response = await axios.post(`http://localhost:5000/chat_conversation/${filename}`, {
+                    query: userMessage
+                });
+
+                setMessages(prev => [...prev.slice(0, -1), { text: response.data.answer, isUser: false }]);
+                setCurrentStage(3);
+            } catch (err) {
+                // Remove loading message if error occurs
+                setMessages(prev => prev.slice(0, -1));
+                setError('Failed to get response');
+                console.error('Chat error:', err);
+            } finally {
+                setLoading(false);
+            }
         }
     };
 
@@ -225,7 +316,36 @@ const ChatPage = () => {
                             backgroundColor: 'transparent',
                             ...CustomScrollbar
                         }}>
-                            {messages.map((message, index) => (
+                            {messages.length === 0 ? (
+                                <div style={{
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    height: '100%',
+                                    gap: '1rem'
+                                }}>
+                                    <img
+                                        src="/rover.png"
+                                        alt="Research Rover"
+                                        style={{
+                                            width: '120px',
+                                            height: '120px',
+                                            borderRadius: '24px',
+                                            objectFit: 'cover',
+                                        }}
+                                    />
+                                    <p style={{
+                                        color: 'rgba(255, 255, 255, 0.7)',
+                                        fontSize: '1.2rem',
+                                        fontFamily: '"Inter", sans-serif',
+                                        margin: 0
+                                    }}>
+                                        How can I assist you today?
+                                    </p>
+                                </div>
+                            ) : (
+                            messages.map((message, index) => (
                                 <div
                                     key={index}
                                     style={{
@@ -251,6 +371,65 @@ const ChatPage = () => {
                                             {message.isloading && <LoadingDots />}
                                         </div>   
                                     )}
+                                    {message.isUser && (
+                                        <div style={{ 
+                                            position: 'relative',
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            gap: '8px'
+                                        }}>
+                                            <button
+                                                onClick={() => handleCopyText(message.text, index)}
+                                                style={{
+                                                    background: 'transparent',
+                                                    border: 'none',
+                                                    cursor: 'pointer',
+                                                    padding: '4px',
+                                                    opacity: 0.7,
+                                                    transition: 'all 0.2s ease-in-out',
+                                                    color: 'rgba(255, 255, 255, 0.7)',
+                                                    fontSize: '0.75rem',
+                                                    fontFamily: '"Inter", sans-serif',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    width: '24px',
+                                                    height: '24px',
+                                                    ':hover': { opacity: 1 }
+                                                }}
+                                            >
+                                                {copyingStates[index] ? (
+                                                    <span style={{
+                                                        animation: `${fadeIn} 0.2s ease-in-out`,
+                                                        whiteSpace: 'nowrap'
+                                                    }}>
+                                                        Copied!
+                                                    </span>
+                                                ) : (
+                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
+                                                        <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                                                    </svg>
+                                                )}
+                                            </button>
+                                            <button
+                                                onClick={() => handleEditMessage(message.text, index)}
+                                                style={{
+                                                    background: 'transparent',
+                                                    border: 'none',
+                                                    cursor: 'pointer',
+                                                    padding: '4px',
+                                                    opacity: 0.7,
+                                                    transition: 'opacity 0.2s',
+                                                    ':hover': { opacity: 1 }
+                                                }}
+                                            >
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
+                                                    <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+                                                </svg>
+                                            </button>
+                                            
+                                        </div>
+                                    )}
                                     {!message.isloading && (
                                         <div style={{
                                             backgroundColor: message.isUser 
@@ -269,6 +448,41 @@ const ChatPage = () => {
                                             {message.isUser ? message.text : <TypeWriter text={message.text} speed={5} />}
                                         </div>
                                     )}
+                                   {!message.isUser && !message.isloading && (
+                                        <button
+                                            onClick={() => handleCopyText(message.text, index)}
+                                            style={{
+                                                background: 'transparent',
+                                                    border: 'none',
+                                                    cursor: 'pointer',
+                                                    padding: '4px',
+                                                    opacity: 0.7,
+                                                    transition: 'all 0.2s ease-in-out',
+                                                    color: 'rgba(255, 255, 255, 0.7)',
+                                                    fontSize: '0.75rem',
+                                                    fontFamily: '"Inter", sans-serif',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    width: '24px',
+                                                    height: '24px',
+                                                    ':hover': { opacity: 1 }
+                                                }}
+                                            >
+                                                {copyingStates[index] ? (
+                                                    <span style={{
+                                                        animation: `${fadeIn} 0.2s ease-in-out`,
+                                                        whiteSpace: 'nowrap'
+                                                    }}>
+                                                        Copied!
+                                                    </span>
+                                                ) : (
+                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
+                                                        <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                                                    </svg>
+                                                )}
+                                        </button>
+                                    )} 
                                     {message.isUser && (
                                         <div style={{
                                             width: '42px',
@@ -286,7 +500,8 @@ const ChatPage = () => {
                                         </div>
                                     )}
                                 </div>
-                            ))}
+                            ))
+                        )}
                             <div ref={messagesEndRef} />
                         </div>
 
@@ -309,6 +524,12 @@ const ChatPage = () => {
                                     type="text"
                                     value={inputMessage}
                                     onChange={(e) => setInputMessage(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && !e.shiftKey) {
+                                            e.preventDefault();
+                                            handleSendMessage(e);
+                                        }
+                                    }}
                                     placeholder="Ask your query..."
                                     rows={1}
                                     style={{

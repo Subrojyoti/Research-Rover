@@ -98,21 +98,62 @@ const LoadingDots = () => {
 };
 
 const TypeWriter = ({ text, speed = 10 }) => {
-    const [displayedText, setDisplayedText] = useState('');
-    const [currentIndex, setCurrentIndex] = useState(0);
+    const [displayedParts, setDisplayedParts] = useState([]);
+    const [currentPartIndex, setCurrentPartIndex] = useState(0);
+    const [currentCharIndex, setCurrentCharIndex] = useState(0);
 
     useEffect(() => {
-        if (currentIndex < text.length) {
-            const timer = setTimeout(() => {
-                setDisplayedText(prev => prev + text[currentIndex]);
-                setCurrentIndex(currentIndex + 1);
-            }, speed);
+        // If text is an array of parts (from formatResponseWithClickableLinks)
+        if (Array.isArray(text)) {
+            if (currentPartIndex >= text.length) {
+                return;
+            }
 
-            return () => clearTimeout(timer);
+            const currentPart = text[currentPartIndex];
+            
+            // If current part is a React element (link), add it immediately
+            if (React.isValidElement(currentPart)) {
+                const timer = setTimeout(() => {
+                    setDisplayedParts(prev => [...prev, currentPart]);
+                    setCurrentPartIndex(prev => prev + 1);
+                    setCurrentCharIndex(0);
+                }, speed);
+                return () => clearTimeout(timer);
+            }
+            
+            // If current part is text, type it out character by character
+            if (currentCharIndex < currentPart.length) {
+                const timer = setTimeout(() => {
+                    if (currentCharIndex === 0) {
+                        setDisplayedParts(prev => [...prev, currentPart[0]]);
+                    } else {
+                        setDisplayedParts(prev => {
+                            const newParts = [...prev];
+                            newParts[newParts.length - 1] += currentPart[currentCharIndex];
+                            return newParts;
+                        });
+                    }
+                    setCurrentCharIndex(prev => prev + 1);
+                }, speed);
+                return () => clearTimeout(timer);
+            } else {
+                // Move to next part
+                setCurrentPartIndex(prev => prev + 1);
+                setCurrentCharIndex(0);
+            }
+        } else {
+            // Handle regular text (old behavior)
+            if (currentCharIndex < text.length) {
+                const timer = setTimeout(() => {
+                    setDisplayedParts([text.slice(0, currentCharIndex + 1)]);
+                    setCurrentCharIndex(prev => prev + 1);
+                }, speed);
+                return () => clearTimeout(timer);
+            }
         }
-    }, [currentIndex, text, speed]);
+    }, [text, currentPartIndex, currentCharIndex, speed]);
 
-    return <>{displayedText}</>;
+    return <>{displayedParts}</>;
 };
 
 const fadeIn = keyframes`
@@ -126,6 +167,58 @@ const fadeIn = keyframes`
   }
 `;
 
+const formatResponseWithClickableLinks = (text, downloadUrls) => {
+    if (!text) return [''];
+    
+    const citationRegex = /\[(\d+)\]/g;
+    let parts = [];
+    let lastIndex = 0;
+    let match;
+    
+    while ((match = citationRegex.exec(text)) !== null) {
+        if (match.index > lastIndex) {
+            parts.push(text.substring(lastIndex, match.index));
+        }
+        
+        const citationNumber = parseInt(match[1]) - 1;
+        const downloadUrl = downloadUrls[citationNumber];
+        
+        parts.push(
+            <a
+                key={`citation-${match.index}`}
+                href={downloadUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                    color: '#4CAF50',
+                    textDecoration: 'none',
+                    fontWeight: 'bold',
+                    padding: '0 2px',
+                    borderRadius: '4px',
+                    transition: 'background-color 0.2s',
+                    cursor: downloadUrl ? 'pointer' : 'not-allowed',
+                }}
+                onMouseEnter={(e) => {
+                    e.target.style.backgroundColor = 'rgba(76, 175, 80, 0.1)';
+                }}
+                onMouseLeave={(e) => {
+                    e.target.style.backgroundColor = 'transparent';
+                }}
+            >
+                {match[0]}
+            </a>
+        );
+        
+        lastIndex = match.index + match[0].length;
+    }
+    
+    if (lastIndex < text.length) {
+        parts.push(text.substring(lastIndex));
+    }
+    
+    return parts;
+};
+
 const ChatPage = () => {
     const [messages, setMessages] = useState([]);
     const [inputMessage, setInputMessage] = useState('');
@@ -134,6 +227,7 @@ const ChatPage = () => {
     const [error, setError] = useState(null);
     // const [copiedMessageId, setCopiedMessageId] = useState(null);
     const [editingMessageId, setEditingMessageId] = useState(null);
+    const [editingMessage, setEditingMessage] = useState('');
     const [copyingStates, setCopyingStates] = useState({});
     const messagesEndRef = useRef(null);
     const location = useLocation();
@@ -157,9 +251,10 @@ const ChatPage = () => {
         }
     };
 
-    const handleEditMessage = (text, messageId) => {
-        setInputMessage(text);
-        setEditingMessageId(messageId);
+    const handleEditMessage = (messageText, index) => {
+        setEditingMessageId(index);
+        setEditingMessage(messageText);
+        setInputMessage(messageText);
     };
 
     useEffect(() => {
@@ -169,35 +264,33 @@ const ChatPage = () => {
     const handleSendMessage = async (e) => {
         e?.preventDefault();
         if (!inputMessage.trim() || loading) return;
-
+    
         const userMessage = inputMessage;
         setInputMessage('');
-
-        if(editingMessageId != null){
+    
+        if (editingMessageId !== null) {
+            // Handle edited message
             setMessages(prev => {
                 const newMessages = [...prev];
-
-                // update the edited user message
-                newMessages[editingMessageId] = { ...newMessages[editingMessageId], text: userMessage};
-
-                // Remove the old AI response that comes after the edited message
-                if(!newMessages[editingMessageId + 1]?.isUser){
+                // Update the edited message
+                newMessages[editingMessageId] = { 
+                    text: userMessage, 
+                    isUser: true 
+                };
+                // Remove subsequent AI response
+                if (newMessages[editingMessageId + 1] && !newMessages[editingMessageId + 1].isUser) {
                     newMessages.splice(editingMessageId + 1, 1);
                 }
-
                 // Add loading message
                 newMessages.splice(editingMessageId + 1, 0, {
-                    text: "",
                     isUser: false,
                     isloading: true
                 });
-
                 return newMessages;
             });
-
+    
             setLoading(true);
-            setCurrentStage(0);
-
+    
             try {
                 const response = await axios.post(`http://localhost:5000/chat_conversation/${filename}`, {
                     query: userMessage
@@ -205,49 +298,64 @@ const ChatPage = () => {
     
                 setMessages(prev => {
                     const newMessages = [...prev];
-                    // Replace loading message with new response
-                    const nextMessageIndex = editingMessageId + 1;
-                    newMessages[nextMessageIndex] = { text: response.data.answer, isUser: false };
+                    // Replace loading message with actual response
+                    newMessages.splice(editingMessageId + 1, 1, {
+                        text: response.data.responseText,
+                        downloadUrls: response.data.downloadUrls,
+                        isUser: false,
+                        isloading: false
+                    });
                     return newMessages;
                 });
-                setCurrentStage(3);
             } catch (err) {
-                // Remove loading message if error occurs
-                setMessages(prev => {
-                    const newMessages = [...prev];
-                    const nextMessageIndex = editingMessageId + 1;
-                    newMessages.splice(nextMessageIndex, 1);
-                    return newMessages;
-                });
                 setError('Failed to get response');
                 console.error('Chat error:', err);
+                // Remove loading message on error
+                setMessages(prev => {
+                    const newMessages = [...prev];
+                    newMessages.splice(editingMessageId + 1, 1);
+                    return newMessages;
+                });
             } finally {
                 setLoading(false);
                 setEditingMessageId(null);
+                setEditingMessage('');
             }
-        } 
-        else{
-        // Add user message to chat
-            setMessages(prev => [...prev, { text: userMessage, isUser: true }]);
-
-            // Set loading state and current stage
-            setMessages(prev => [...prev, { text: "", isUser: false, isloading: true }]);
-
+        } else {
+            // Handle new message
+            setMessages(prev => [...prev, { 
+                text: userMessage, 
+                isUser: true 
+            }]);
+    
+            // Add loading message
+            setMessages(prev => [...prev, {
+                isUser: false,
+                isloading: true
+            }]);
+    
             setLoading(true);
-            setCurrentStage(0);
-
+    
             try {
                 const response = await axios.post(`http://localhost:5000/chat_conversation/${filename}`, {
                     query: userMessage
                 });
-
-                setMessages(prev => [...prev.slice(0, -1), { text: response.data.answer, isUser: false }]);
-                setCurrentStage(3);
+    
+                // Replace loading message with actual response
+                setMessages(prev => [
+                    ...prev.slice(0, -1),
+                    {
+                        text: response.data.responseText,
+                        downloadUrls: response.data.downloadUrls,
+                        isUser: false,
+                        isloading: false
+                    }
+                ]);
             } catch (err) {
-                // Remove loading message if error occurs
-                setMessages(prev => prev.slice(0, -1));
                 setError('Failed to get response');
                 console.error('Chat error:', err);
+                // Remove loading message on error
+                setMessages(prev => [...prev.slice(0, -1)]);
             } finally {
                 setLoading(false);
             }
@@ -445,7 +553,26 @@ const ChatPage = () => {
                                                 ? '1px solid rgba(76, 175, 80, 0.5)'
                                                 : '1px solid rgba(255, 255, 255, 0.1)',
                                         }}>
-                                            {message.isUser ? message.text : <TypeWriter text={message.text} speed={5} />}
+                                            {message.isUser ? (
+                                                message.text
+                                            ) : (
+                                                message.isloading ? (
+                                                    <LoadingDots />
+                                                ) : (
+                                                    message.downloadUrls ? (
+                                                        <TypeWriter
+                                                            text={
+                                                                formatResponseWithClickableLinks(message.text, message.downloadUrls)} 
+                                                            speed={5}
+                                                        />
+                                                    ) : (
+                                                        <TypeWriter
+                                                            text={message.text}
+                                                            speed={5}
+                                                        />
+                                                    )
+                                                )
+                                            )}
                                         </div>
                                     )}
                                    {!message.isUser && !message.isloading && (

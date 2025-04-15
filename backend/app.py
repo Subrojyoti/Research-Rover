@@ -11,6 +11,7 @@ from sentence_transformers import SentenceTransformer
 import faiss
 import re
 import time
+import pandas as pd
 
 
 from utils.llm_setup import llm_instance as llm
@@ -446,13 +447,15 @@ def chat_conversation(filename):
     query = data.get("query", "")
     if not query:
         return jsonify({"error": "Query parameter is required"}), 400
-    filename = filename.replace(".csv", "")
-    FAISS_INDEX_FILE = f"{filename}_paper_chunks_hdbscan.index"
+    base_filename = filename.replace(".csv", "")
+    FAISS_INDEX_FILE = f"{base_filename}_paper_chunks_hdbscan.index"
     FAISS_INDEX_FILE_PATH = os.path.join(DATA_FOLDER, FAISS_INDEX_FILE)
-    app.logger.info(f"FAISS_INDEX_FILE_PATH: {FAISS_INDEX_FILE_PATH}")
-    METADATA_FILE = f"{filename}_paper_chunk_metadata_hdbscan.json"
+    METADATA_FILE = f"{base_filename}_paper_chunk_metadata_hdbscan.json"
     METADATA_FILE_PATH = os.path.join(DATA_FOLDER, METADATA_FILE)
-    app.logger.info(f"METADATA_FILE_PATH: {METADATA_FILE_PATH}")
+    CSV_FILE = filename
+    CSV_FILE_PATH = os.path.join(DATA_FOLDER, CSV_FILE)
+
+    # Loading the embedding model
     EMBEDDING_MODEL = 'all-mpnet-base-v2'
     sentence_model = SentenceTransformer(EMBEDDING_MODEL)
 
@@ -468,45 +471,190 @@ def chat_conversation(filename):
             return jsonify({"error": "Failed to load metadata file"}), 500
         
         search_results = search_faiss(query, sentence_model, faiss_index, all_chunk_metadata, k= 5)
+
+        if not search_results:
+            app.logger.info("No relevant documents found for the query.")
+            # Return the requested structure but indicate no results
+            return jsonify({
+                "paperTitles": [],
+                "downloadUrls": [],
+                "responseText": "I cannot answer the question based on the provided context, as no relevant documents were found."
+            })
+    
         if search_results:
             app.logger.info(f"Search results found: {len(search_results)}")
-            llm_context_string = "" # prepare context string for LLM use
-            for i, result in enumerate(search_results):
-                llm_context_string += f"[Source DOI: {result.get('doi', 'N/A')}, Title: {result.get('paperTitle', 'N/A')}]\n"
-                llm_context_string += f"Chunk {i+1}: {result.get('text', '')}\n---\n"
+            # --- Process Search Results and Prepare Context ---
+            llm_context_string = ""
+            unique_papers = {} # Store unique papers: {doi: {'title': title, 'index': index}}
+            context_docs_for_llm = []
+            current_paper_index = 1
+
+            # First pass: Identify unique papers and assign indices
+            for result in search_results:
+                # Use DOI as the primary key, handle potential missing DOIs
+                doi = result.get('doi')
+                title = result.get('paperTitle', 'Unknown Title')
+                if doi and doi not in unique_papers:
+                    unique_papers[doi] = {'title': title, 'index': current_paper_index}
+                    current_paper_index += 1
+                elif not doi:
+                    # Handle missing DOI - maybe use title or a placeholder if title is also missing
+                    # For simplicity, we might treat chunks without DOI as potentially separate sources if needed,
+                    # or group them under a generic placeholder. Let's assign a unique index based on title if DOI is missing.
+                    # This part might need refinement based on data quality.
+                    placeholder_key = f"missing_doi_{title}"
+                    if placeholder_key not in unique_papers:
+                        unique_papers[placeholder_key] = {'title': title, 'index': current_paper_index, 'is_placeholder': True}
+                        current_paper_index += 1
+
+
+            # Second pass: Build the context string with assigned indices
+            source_details_for_output = {} # {index: {'title': title, 'doi': doi}}
+            for result in search_results:
+                text = result.get('text', '')
+                doi = result.get('doi')
+                title = result.get('paperTitle', 'Unknown Title')
+
+                if doi and doi in unique_papers:
+                    paper_info = unique_papers[doi]
+                    assigned_index = paper_info['index']
+                    if assigned_index not in source_details_for_output:
+                        source_details_for_output[assigned_index] = {'title': paper_info['title'], 'doi': doi}
+                elif not doi:
+                    placeholder_key = f"missing_doi_{title}"
+                    if placeholder_key in unique_papers:
+                        paper_info = unique_papers[placeholder_key]
+                        assigned_index = paper_info['index']
+                        if assigned_index not in source_details_for_output:
+                            source_details_for_output[assigned_index] = {'title': paper_info['title'], 'doi': None} # Mark DOI as None
+                    else:
+                        # Should not happen if first pass was correct, but as a fallback:
+                        assigned_index = 0 # Indicate an issue or unmapped chunk
+                        app.logger.warning(f"Could not map chunk to a unique paper: {title}")
+                else:
+                    assigned_index = 0 # Should not happen
+                    app.logger.warning(f"DOI {doi} found in result but not in unique_papers map.")
+
+
+                # Format for LLM context - include the assigned citation index
+                # Only add index if successfully assigned
+                if assigned_index > 0:
+                    context_docs_for_llm.append(f"[{assigned_index}] [Source Title: {title}]\nChunk Content: {text}\n---")
+                else:
+                    # Include chunks even if mapping failed, but without an index the LLM can cite
+                    context_docs_for_llm.append(f"[Unmapped Source Title: {title}]\nChunk Content: {text}\n---")
+
+            llm_context_string = "\n".join(context_docs_for_llm)
+            # Prepare ordered lists for final output based on assigned indices
+            final_paper_titles = [None] * len(source_details_for_output)
+            final_paper_dois = [None] * len(source_details_for_output)
+            for index, details in source_details_for_output.items():
+                # Adjust index to be 0-based for list insertion
+                list_index = index - 1
+                if 0 <= list_index < len(final_paper_titles):
+                    final_paper_titles[list_index] = details['title']
+                    final_paper_dois[list_index] = details['doi'] # Store DOI for URL lookup
+
+            # --- Fetch Download URLs ---
+            final_download_urls = [None] * len(final_paper_titles)
+            try:
+                if os.path.exists(CSV_FILE_PATH):
+                    app.logger.info(f"Reading CSV for URLs: {CSV_FILE_PATH}")
+                    df_papers = pd.read_csv(CSV_FILE_PATH)
+
+                    # Ensure DOI column exists and handle potential missing values/types
+                    if 'Doi' in df_papers.columns and 'Download_URL' in df_papers.columns:
+                        # Convert both lookup DOIs and DataFrame DOIs to string for comparison
+                        df_papers['Doi'] = df_papers['Doi'].astype(str).fillna('N/A').str.strip()
+                        # Create a lookup map: DOI -> URL
+                        url_map = pd.Series(df_papers.Download_URL.values, index=df_papers.Doi).to_dict()
+
+                        for i, doi in enumerate(final_paper_dois):
+                            if doi: # Only look up if DOI exists
+                                url = url_map.get(str(doi).strip()) # Ensure lookup DOI is also string/stripped
+                                final_download_urls[i] = url if pd.notna(url) else "URL not available in CSV"
+                            else:
+                                final_download_urls[i] = "URL not available (DOI missing)"
+                    else:
+                        app.logger.warning(f"'Doi' or 'Download_URL' column not found in {CSV_FILE_PATH}.")
+                        final_download_urls = ["URL lookup failed (Column missing)"] * len(final_paper_titles)
+
+                else:
+                    app.logger.warning(f"Original CSV file not found: {CSV_FILE_PATH}. Cannot fetch download URLs.")
+                    final_download_urls = ["URL lookup failed (CSV not found)"] * len(final_paper_titles)
+            
+            except Exception as e:
+                app.logger.error(f"Error reading or processing CSV {CSV_FILE_PATH} for URLs: {e}")
+                final_download_urls = ["URL lookup failed (Error)"] * len(final_paper_titles)
 
             # llm prompt
             llm_prompt = f"""
-            Your task is to answer the following question based ONLY on the context documents provided below.
+    Your task is to answer the following question based ONLY on the context documents provided below.
 
-            Instructions:
-            - Answer the question solely using the information present in the 'Context Documents' section.
-            - Do not use any external knowledge or prior assumptions.
-            - Clearly define any pronouns (e.g. it, they must be refered to the one clearly refered with names/entities).
-            - If the answer cannot be found within the provided context, explicitly state "I cannot answer the question based on the provided context."
-            - Be concise and directly address the question.
+    Instructions:
+    - Answer the question solely using the information present in the 'Context Documents' section.
+    - Do not use any external knowledge or prior assumptions.
 
-            Context Documents: 
-            {llm_context_string}
+    - **Paraphrase and Synthesize:**
+        - **Do NOT copy sentences directly** from the context documents.
+        - Rephrase the information accurately in your own words, preserving the original meaning.
+        - Synthesize information from multiple sources where appropriate to provide a cohesive answer.
 
-            Question: 
-            {query}
+    - **Citation Requirements:**
+        - You MUST cite the source(s) for every piece of information presented in your answer.
+        - Use the index number provided in brackets (e.g., [1], [2]) corresponding to the source document listed in the 'Context Documents' (e.g., `[1] [Source Title: ...]`).
+        - **Place the citation(s) ONLY at the end of the sentence, or at the end of a sequence of sentences, that are directly supported by that source(s).**
+        - **Citation Placement Example:** If sentence A and sentence B are both based *only* on source [1], and sentence C is based *only* on source [4], the correct format is: "Sentence A. Sentence B.[1] Sentence C.[4]".
+        - **Multiple Sources Example:** If a statement synthesizes information from sources [1] and [3], cite it as: "Synthesized statement.[1][3]".
 
-            Answer:
-            """
+    - **Clarity:** Define pronouns clearly (e.g., avoid ambiguous "it" or "they"). Refer back to specific entities mentioned in the context.
+    - **Completeness:** Ensure all parts of the question are addressed if possible within the context.
+    - **Unknown Answer:** If the answer cannot be found within the provided context documents, explicitly state: "I cannot answer the question based on the provided context."
+    - **Conciseness:** Be direct and avoid unnecessary waffle.
 
-            # Call LLM
-            # try:
-            llm_response = llm.generate_content(llm_prompt)
-            app.logger.info(f"LLM response: {llm_response.text}")
-            return jsonify({"answer": llm_response.text})
-            # except Exception as e:
-            #     return jsonify({"error": "Failed to generate response"}), 500
-                
-    # except Exception as e:
-    #     app.logger.error(f"Error in chat_conversation for {filename}: {e}", exc_info=True)
-    #     return jsonify({"error": "Failed to chat conversation"}), 500
-        
+    Context Documents:
+    {llm_context_string}
+
+    Question:
+    {query}
+
+    Answer (Paraphrased text based *only* on the context above. Citations MUST be placed at the end of the sentence or group of sentences they support, like sentence1. sentence2.[1] sentence3.[4]):
+    """
+
+            # --- Call LLM ---
+            try:
+                app.logger.info("Sending prompt to LLM.")
+                # You might want to configure generation parameters (temperature, max output tokens, etc.)
+                # response = llm.generate_content(llm_prompt, generation_config=genai.types.GenerationConfig(...))
+                llm_response = llm.generate_content(llm_prompt)
+
+                # Accessing the text might differ slightly depending on the library version
+                # Check the structure of llm_response if .text doesn't work (e.g., might be llm_response.parts[0].text)
+                if hasattr(llm_response, 'text'):
+                    response_text = llm_response.text
+                elif hasattr(llm_response, 'parts') and llm_response.parts:
+                    response_text = llm_response.parts[0].text
+                else:
+                    # Fallback or error handling if response structure is unexpected
+                    app.logger.error(f"Unexpected LLM response structure: {llm_response}")
+                    response_text = "Error: Could not parse LLM response."
+
+
+                app.logger.info(f"LLM response received.") # Avoid logging full response if sensitive/long
+
+            except Exception as e:
+                app.logger.error(f"Error calling LLM: {e}")
+                return jsonify({"error": f"LLM generation failed: {e}"}), 500
+
+            # --- Structure Final JSON Response ---
+            final_response = {
+                "paperTitles": final_paper_titles,
+                "downloadUrls": final_download_urls,
+                "responseText": response_text.strip() # Clean up whitespace
+            }
+
+            return jsonify(final_response)
+            
         
         
         

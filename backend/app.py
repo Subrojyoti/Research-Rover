@@ -338,6 +338,7 @@ def download_pdfs(filename):
 # --- Create Embedding Endpoint & Build FAISS Index Endpoint ---
 @app.route("/create_embedding/<filename>")
 def create_embedding_and_build_faiss_index(filename):
+    start = time.time()
     try:
         global embedding_progress
         # Load data from CSV file
@@ -428,6 +429,8 @@ def create_embedding_and_build_faiss_index(filename):
             "message": "Embeddings created successfully",
             "timestamp": time.time()
         }
+        end = time.time()
+        app.logger.info(f"Embeddings created successfully in {end - start:.2f} seconds")
         return jsonify({"message": "Embeddings created successfully"}), 200
         
     except Exception as e:
@@ -654,15 +657,6 @@ def chat_conversation(filename):
             }
 
             return jsonify(final_response)
-            
-        
-        
-        
-        
-        
-        
-    
-        
-
+  
 if __name__ == "__main__":
     app.run(debug=True)

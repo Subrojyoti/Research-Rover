@@ -200,12 +200,14 @@ const formatResponseWithClickableLinks = (text, downloadUrls) => {
                 }}
                 onMouseEnter={(e) => {
                     e.target.style.backgroundColor = 'rgba(76, 175, 80, 0.1)';
+                    e.currentTarget.style.transform = 'scale(1.1)';
                 }}
                 onMouseLeave={(e) => {
                     e.target.style.backgroundColor = 'transparent';
+                    e.currentTarget.style.transform = 'scale(1)';
                 }}
             >
-                {match[0]}
+                <sup>[{match[1]}]</sup>
             </a>
         );
         

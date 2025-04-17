@@ -53,9 +53,10 @@ const ContentWrapper = styled(Box)({
 
 const SearchPage = () => {
     const [query, setQuery] = useState('');
-    const [maxResults, setMaxResults] = useState(10);
-    const [startYear, setStartYear] = useState(0);
-    const [endYear, setEndYear] = useState(0);
+    const [prevquery, setPrevQuery] = useState('');
+    const [maxResults, setMaxResults] = useState('');
+    const [startYear, setStartYear] = useState('');
+    const [endYear, setEndYear] = useState('');
     const [papers, setPapers] = useState([]);
     const [loading, setLoading] = useState(false);
     const [csvLoading, setCsvLoading] = useState(false);
@@ -191,8 +192,12 @@ const SearchPage = () => {
             const searchResponse = await axios.get(`http://localhost:5000/search?query=${query}&page=1&per_page=${perPage}&max_results=${maxResultsValue}&start_year=${startYearValue}&end_year=${endYearValue}`);
             const csvFilename = searchResponse.data.csv_filename;
             setCsvFilename(csvFilename);
+            setPrevQuery(query);
             setTotalResults(searchResponse.data.total_results || 0)
             setTotalPages(searchResponse.data.total_pages || 1);
+
+            navigate(`/search?filename=${csvFilename}`, { replace: true });
+
             setPapers(searchResponse.data.results.map(result => ({
                 source: result.dataProviders?.[0]?.name || 'Unknown',
                 title: result.title || 'Unknown',
@@ -229,6 +234,36 @@ const SearchPage = () => {
         }
     };
 
+    // Add a useEffect to handle initial load with filename in URL
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const filenameFromUrl = params.get('filename');
+        
+        if (filenameFromUrl) {
+            setCsvFilename(filenameFromUrl);
+            // Load the results for this filename
+            const loadResults = async () => {
+                try {
+                    const csvResponse = await axios.get(`http://localhost:5000/get_paginated_results?filename=${filenameFromUrl}&page=1&per_page=${perPage}`);
+                    const parsedPapers = csvResponse.data.results.map(paper => ({
+                        ...paper,
+                        keywords: paper.keywords ? 
+                            (typeof paper.keywords === 'string' ? 
+                                JSON.parse(paper.keywords.replace(/'/g, '"')) : 
+                                paper.keywords) : 
+                            []
+                    }));
+                    setPapers(parsedPapers);
+                    setTotalPages(csvResponse.data.total_pages || 1);
+                } catch (error) {
+                    console.error('Error loading results:', error);
+                    setError('Failed to load saved results');
+                }
+            };
+            loadResults();
+        }
+    }, []);
+
     const handleDownloadClick = (event) => {
         setAnchorEl(event.currentTarget);
     };
@@ -255,6 +290,7 @@ const SearchPage = () => {
         try {
             const response = await axios.get(`http://localhost:5000/get_paginated_results?filename=${csvFilename}&page=${newPage}&per_page=${perPage}`);
             
+            navigate(`/search?filename=${csvFilename}&page=${newPage}`, { replace: true });
             // Parse the CSV data and extract keywords
             const parsedPapers = response.data.results.map(paper => ({
                 ...paper,
@@ -356,6 +392,8 @@ const SearchPage = () => {
                                     }}>
                                         <input
                                             type="text"
+                                            id="query"
+                                            name="query"
                                             value={query}
                                             onChange={(e) => setQuery(e.target.value)}
                                             placeholder="Search for research papers..."
@@ -376,6 +414,8 @@ const SearchPage = () => {
                                         />
                                         <input
                                             type="number"
+                                            id="maxResults"
+                                            name="maxResults"
                                             value={maxResults}
                                             onChange={(e) => {
                                                 const value = e.target.value;
@@ -409,7 +449,7 @@ const SearchPage = () => {
                                                 caretColor: 'white',
                                                 textAlign: 'center',
                                                 height: '30px',
-                                                lineHeight: '1'
+                                                lineHeight: '1',
                                             }}
                                             onFocus={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'}
                                             onBlur={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.15)'}
@@ -458,6 +498,8 @@ const SearchPage = () => {
                                         }}>Year:</label> */}
                                         <input
                                             type="number"
+                                            id="startYear"
+                                            name="startYear"
                                             value={startYear}
                                             onChange={(e) => {
                                                 const value = e.target.value;
@@ -491,6 +533,8 @@ const SearchPage = () => {
                                         <span style={{ color: 'white' }}>-</span>
                                         <input
                                             type="number"
+                                            id="endYear"
+                                            name="endYear"
                                             value={endYear}
                                             onChange={(e) => {
                                                 const value = e.target.value;
@@ -611,7 +655,7 @@ const SearchPage = () => {
                                                     fontWeight: '600',
                                                     fontStyle: 'italic'
                                                 }}>
-                                                    "{query}"
+                                                    "{prevquery}"
                                                 </span>
                                             </div>
                                             <div style={{ 

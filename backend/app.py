@@ -30,6 +30,22 @@ CORS(app)  # Enable CORS for frontend-backend communication
 DATA_FOLDER = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
 os.makedirs(DATA_FOLDER, exist_ok=True)
 
+EMBEDDING_MODEL = 'all-mpnet-base-v2'
+sentence_model = None  # Global variable for sentence model
+
+def get_sentence_model():
+    """Initialize or return existing sentence model"""
+    global sentence_model
+    if sentence_model is None:
+        app.logger.info("Initializing sentence model...")
+        try:
+            sentence_model = SentenceTransformer(EMBEDDING_MODEL)
+            app.logger.info("Sentence model initialized successfully")
+        except Exception as e:
+            app.logger.error(f"Failed to initialize sentence model: {e}")
+            return None
+    return sentence_model
+
 # Global variable to track search progress
 search_progress = {
     "stage": 0,
@@ -455,11 +471,11 @@ def chat_conversation(filename):
     METADATA_FILE = f"{base_filename}_paper_chunk_metadata_hdbscan.json"
     METADATA_FILE_PATH = os.path.join(DATA_FOLDER, METADATA_FILE)
     CSV_FILE = filename
-    CSV_FILE_PATH = os.path.join(DATA_FOLDER, CSV_FILE)
 
-    # Loading the embedding model
-    EMBEDDING_MODEL = 'all-mpnet-base-v2'
-    sentence_model = SentenceTransformer(EMBEDDING_MODEL)
+    # Get the sentence model
+    sentence_model = get_sentence_model()
+    if sentence_model is None:
+            return jsonify({"error": "Failed to initialize sentence model"}), 500
 
     if FAISS_INDEX_FILE_PATH and METADATA_FILE_PATH and sentence_model:
         if llm is None:
@@ -472,7 +488,101 @@ def chat_conversation(filename):
         except Exception as e:
             return jsonify({"error": "Failed to load metadata file"}), 500
         
-        search_results = search_faiss(query, sentence_model, faiss_index, all_chunk_metadata, k= 5)
+        # Query decomposition
+        sub_queries = []
+        try:
+            # Simple check for potentially complex queries (e.g., length, keywords) - optional
+            # if len(original_query.split()) > 15 or any(k in original_query for k in [' and ', ' what ', ' why ', ' how ']):
+            decomposition_prompt = f"""
+    Given the user query: '{query}', break it down into distinct, self-contained questions or search terms that cover all aspects of the original query.
+    List each distinct question/term on a new line.
+    If the query is already simple and focused, just return the original query on a single line.
+    Example:
+    User query: What is machine learning, why is it important in healthcare and what are its setbacks/limitations?
+    Output:
+    What is machine learning?
+    Why is machine learning important in healthcare?
+    What are the setbacks/limitations of machine learning in healthcare?
+
+    User query: Tell me about FAISS.
+    Output:
+    Tell me about FAISS.
+
+    User query: {query}
+    Output:"""
+            app.logger.info(f"Decomposing query: {query}")
+            # Make sure your llm object and method are correct
+            decomposition_response = llm.generate_content(decomposition_prompt)
+
+            # Adjust parsing based on your LLM library's response structure
+            response_text = ""
+            if hasattr(decomposition_response, 'text'):
+                response_text = decomposition_response.text
+            elif hasattr(decomposition_response, 'parts') and decomposition_response.parts:
+                response_text = decomposition_response.parts[0].text
+            else:
+                app.logger.warning(f"Unexpected LLM response structure for decomposition: {decomposition_response}")
+        
+            if response_text:
+                sub_queries = [q.strip() for q in response_text.split('\n') if q.strip()]
+
+            if not sub_queries: # Fallback if decomposition fails or returns empty
+                app.logger.warning("Query decomposition returned empty, using original query.")
+                sub_queries = [query]
+            else:
+                # Limit the number of sub-queries to avoid excessive searching (optional)
+                max_sub_queries = 5
+                if len(sub_queries) > max_sub_queries:
+                    app.logger.warning(f"Too many sub-queries ({len(sub_queries)}), limiting to {max_sub_queries}.")
+                    sub_queries = sub_queries[:max_sub_queries]
+                app.logger.info(f"Decomposed into sub-queries: {sub_queries}")
+
+        except Exception as e:
+            app.logger.error(f"Error during query decomposition: {e}. Falling back to original query.")
+            sub_queries = [query] # Fallback
+
+        # Search for each sub_query
+        all_results_raw = []
+        search_k_per_query = 3 # How many results to fetch per sub-query
+        for sub_q in sub_queries:
+            try:
+                # Call your existing search function
+                results = search_faiss(
+                    query=sub_q,
+                    sentence_model=sentence_model,
+                    index=faiss_index,
+                    metadata_list=all_chunk_metadata,
+                    k=search_k_per_query
+                )
+                if results:
+                    all_results_raw.extend(results)
+                    app.logger.info(f"Retrieved {len(results)} results for sub-query: '{sub_q}'")
+            except Exception as e:
+                app.logger.error(f"Error searching for sub-query '{sub_q}': {e}")
+
+        # Deduplicate results
+        unique_results_map = {}
+        for result in all_results_raw:
+            # Determine a unique key for the chunk.
+            # Option 1: If metadata has a unique 'chunk_id' or similar field
+            chunk_key = result.get('chunk_id')
+            # Option 2: Fallback using DOI and text hash (more robust than text alone)
+            if chunk_key is None:
+                text_hash = hash(result.get('text', ''))
+                doi = result.get('doi', 'Unknown DOI')
+                chunk_key = (doi, text_hash) # Tuple as key
+
+            if chunk_key not in unique_results_map:
+                unique_results_map[chunk_key] = result
+            else:
+                # Keep the result with the smaller distance (higher relevance)
+                if result.get('distance', float('inf')) < unique_results_map[chunk_key].get('distance', float('inf')):
+                    unique_results_map[chunk_key] = result
+
+        search_results = list(unique_results_map.values())
+        # Sort final unique results by distance for consistent context ordering
+        search_results.sort(key=lambda x: x.get('distance', float('inf')))
+        app.logger.info(f"Total unique results after deduplication: {len(search_results)}")
 
         if not search_results:
             app.logger.info("No relevant documents found for the query.")
@@ -490,43 +600,52 @@ def chat_conversation(filename):
 
             # llm prompt
             llm_prompt = f"""
-    Your task is to answer the following question based ONLY on the context documents provided below.
+            Your task is to answer the following question based ONLY on the context documents provided below.
 
-    Instructions:
-    - Answer the question solely using the information present in the 'Context Documents' section.
-    - Do not use any external knowledge or prior assumptions.
+            Instructions:
+            - Answer the question solely using the information present in the 'Context Documents' section.
+            - Do not use any external knowledge or prior assumptions.
 
-    - **Paraphrase and Synthesize:**
-        - **Do NOT copy sentences directly** from the context documents.
-        - Rephrase the information accurately in your own words, preserving the original meaning.
-        - Synthesize information from multiple sources where appropriate to provide a cohesive answer.
+            - **Paraphrase and Synthesize:**
+                - **Do NOT copy sentences directly** from the context documents.
+                - Rephrase the information accurately in your own words, preserving the original meaning.
+                - Synthesize information from multiple sources where appropriate to provide a cohesive answer.
 
-    - **Citation Requirements:**
-        - You MUST cite the source(s) for every piece of information presented in your answer.
-        - Use the index number provided in brackets (e.g., [1], [2]) corresponding to the source document listed in the 'Context Documents' (e.g., `[1] [Source Title: ...]`).
-        - **Place the citation(s) ONLY at the end of the sentence, or at the end of a sequence of sentences, that are directly supported by that source(s).**
-        - **Citation Placement Example:** If sentence A and sentence B are both based *only* on source [1], and sentence C is based *only* on source [4], the correct format is: "Sentence A. Sentence B.[1] Sentence C.[4]".
-        - **Multiple Sources Example:** If a statement synthesizes information from sources [1] and [3], cite it as: "Synthesized statement.[1][3]".
+            - **Citation Requirements:**
+                - You MUST cite the source(s) for every piece of information presented in your answer.
+                - Use the index number provided in brackets (e.g., [1], [2]) corresponding to the source document listed in the 'Context Documents' (e.g., `[1] [Source Title: ...]`).
+                - **Place the citation(s) ONLY at the end of the sentence, or at the end of a sequence of sentences, that are directly supported by that source(s).**
+                - **Citation Placement Example:** If sentence A and sentence B are both based *only* on source [1], and sentence C is based *only* on source [4], the correct format is: "Sentence A. Sentence B.[1] Sentence C.[4]".
+                - **Multiple Sources Example:** If a statement synthesizes information from sources [1] and [3], cite it as: "Synthesized statement.[1][3]".
 
-    - **Clarity:** Define pronouns clearly (e.g., avoid ambiguous "it" or "they"). Refer back to specific entities mentioned in the context.
-    - **Completeness:** Ensure all parts of the question are addressed if possible within the context.
-    - **Unknown Answer:** If the answer cannot be found within the provided context documents, explicitly state: "I cannot answer the question based on the provided context."
-    - **Conciseness:** Be direct and avoid unnecessary waffle.
+            - **Clarity:** Define pronouns clearly (e.g., avoid ambiguous "it" or "they"). Refer back to specific entities mentioned in the context.
 
-    Context Documents:
-    {llm_context_string}
+            - **Structure for Multi-Part Questions:**
+                - **Identify Sub-Questions:** Analyze the main question to see if it contains multiple distinct parts or sub-questions (e.g., asking "what" and "how", or asking about multiple different items).
+                - **Address Sequentially:** If sub-questions are identified, structure your answer to address each one separately and in the order they appear in the question.
+                - **Use Paragraphs:** **Use distinct paragraphs for the answer to each sub-question.** This separation is crucial for clarity.
+                - **Example:** For a query like "What is machine learning and how does it affect the healthcare industry?", first provide a paragraph explaining machine learning (citing relevant sources), and then provide a *separate, second* paragraph explaining its effects on healthcare (citing relevant sources).
 
-    Question:
-    {query}
+            - **Completeness:** Ensure all identified parts (sub-questions) of the question are addressed if possible within the context. If a part cannot be answered from the context, state so clearly for that specific part before moving to the next, or at the end if it's the last part.
 
-    Answer (Paraphrased text based *only* on the context above. Citations MUST be placed at the end of the sentence or group of sentences they support, like sentence1. sentence2.[1] sentence3.[4]):
-    """
+            - **Unknown Answer:** If the *entire* answer (or a specific sub-part) cannot be found within the provided context documents, explicitly state: "I cannot answer [the question / this part of the question] based on the provided context."
+
+            - **Conciseness:** Be direct and avoid unnecessary waffle within each section.
+
+
+            Context Documents:
+            {llm_context_string}
+
+            Question:
+            {query}
+
+            Answer (Paraphrased text based *only* on the context above. **Address sub-questions in separate paragraphs.** Citations MUST be placed at the end of the sentence or group of sentences they support, like sentence1. sentence2.[1] sentence3.[4]):
+            """
 
             # --- Call LLM ---
             try:
                 app.logger.info("Sending prompt to LLM.")
                 llm_response = llm.generate_content(llm_prompt)
-
                 # Accessing the text might differ slightly depending on the library version
                 # Check the structure of llm_response if .text doesn't work (e.g., might be llm_response.parts[0].text)
                 if hasattr(llm_response, 'text'):
@@ -544,7 +663,7 @@ def chat_conversation(filename):
             except Exception as e:
                 app.logger.error(f"Error calling LLM: {e}")
                 return jsonify({"error": f"LLM generation failed: {e}"}), 500
-
+                        
             # --- Structure Final JSON Response ---
             final_response = {
                 "paperTitles": final_paper_titles,

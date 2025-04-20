@@ -221,6 +221,11 @@ const formatResponseWithClickableLinks = (text, downloadUrls) => {
     return parts;
 };
 
+const adjustTextareaHeight = (element) => {
+    element.style.height = 'auto';
+    element.style.height = `${element.scrollHeight}px`;
+};
+
 const ChatPage = () => {
     const [messages, setMessages] = useState([]);
     const [inputMessage, setInputMessage] = useState('');
@@ -408,7 +413,7 @@ const ChatPage = () => {
                         }}>
                             <h1 style={{
                                 color: 'white',
-                                fontSize: '1.5rem',
+                                fontSize: '1.8rem', // Increased font size
                                 margin: 0,
                                 fontFamily: '"Inter", sans-serif',
                                 fontWeight: 600,
@@ -439,14 +444,14 @@ const ChatPage = () => {
                                         src="/rover.png"
                                         alt="Research Rover"
                                         style={{
-                                            width: '120px',
-                                            height: '120px',
+                                            width: '5rem',
+                                            height: '5rem',
                                             borderRadius: '24px',
                                             objectFit: 'cover',
                                         }}
                                     />
                                     <p style={{
-                                        color: 'rgba(255, 255, 255, 0.7)',
+                                        color: '#B0BEC5', // Changed color for more prominence
                                         fontSize: '1.2rem',
                                         fontFamily: '"Inter", sans-serif',
                                         margin: 0
@@ -652,7 +657,11 @@ const ChatPage = () => {
                                 <textarea
                                     type="text"
                                     value={inputMessage}
-                                    onChange={(e) => setInputMessage(e.target.value)}
+                                    onChange={(e) => {
+                                        setInputMessage(e.target.value);
+                                        e.target.style.height = 'auto';
+                                        e.target.style.height = `${e.target.scrollHeight}px`;
+                                    }}
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter' && !e.shiftKey) {
                                             e.preventDefault();
@@ -668,7 +677,7 @@ const ChatPage = () => {
                                         backgroundColor: 'transparent',
                                         border: 'none',
                                         outline: 'none',
-                                        color: 'white',
+                                        color: '#FFFFFF',
                                         fontFamily: '"Inter", sans-serif',
                                         caretColor: '#4CAF50',
                                         resize: 'none',
@@ -680,6 +689,7 @@ const ChatPage = () => {
                                             display: 'none',
                                         },
                                         msOverflowStyle: 'none',
+                                        lineHeight: '1.2',
                                     }}
                                 />
                                 <button

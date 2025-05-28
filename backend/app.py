@@ -5,6 +5,7 @@ import csv
 import sys
 import json
 from features.search import search_works, extract_and_save_to_csv
+from features.search_pubmed import search_pubmed
 from features.download_pdfs import download_pdfs_from_csv
 from features.embedding_and_indexing import process_data_generate_vectors_and_metadata, build_faiss_index, save_metadata_list, save_doi_mapped_json, search_faiss
 from sentence_transformers import SentenceTransformer
@@ -24,7 +25,17 @@ while True:
         maxInt = int(maxInt/10)
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for frontend-backend communication
+CORS(app
+# , resources={
+    # r"/*": {
+    #     "origins": "*",  # Allow all origins
+    #     "methods": ["GET", "POST", "OPTIONS"],  # Allow these methods
+    #     "allow_headers": ["Content-Type", "Authorization"],  # Allow these headers
+    #     "expose_headers": ["Content-Type", "Authorization"],  # Expose these headers
+    #     "supports_credentials": True  # Allow credentials
+    # }
+# }
+)
 
 # Define the PDF directory (absolute path)
 DATA_FOLDER = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
@@ -73,6 +84,7 @@ def search():
         query = request.args.get("query", "")
         page = int(request.args.get("page", 1))
         per_page = int(request.args.get("per_page", 10))
+        search_source = request.args.get("search_source", "core").lower()  # Default to "core"
         
         # Handle empty or invalid values for max_results, start_year, and end_year
         try:
@@ -90,7 +102,7 @@ def search():
         except (ValueError, TypeError):
             end_year = 0
             
-        print(f"Received search query: {query}, page: {page}, per_page: {per_page}, max_results: {max_results}, start_year: {start_year}, end_year: {end_year}")
+        print(f"Received search query: {query}, page: {page}, per_page: {per_page}, max_results: {max_results}, start_year: {start_year}, end_year: {end_year}, source: {search_source}")
         if not query:
             return jsonify({"error": "Query parameter is required"}), 400
 
@@ -104,6 +116,7 @@ def search():
 
         # Clear the data folder
         if os.path.exists(DATA_FOLDER):
+            print(f"Clearing data folder: {DATA_FOLDER}")
             for file in os.listdir(DATA_FOLDER):
                 file_path = os.path.join(DATA_FOLDER, file)
                 try:
@@ -116,11 +129,16 @@ def search():
         search_progress = {
             "stage": 1,
             "sub_stage": 0,
-            "message": "Querying CORE API",
+            "message": f"Querying {'PubMed' if search_source == 'pubmed' else 'CORE'} API",
             "timestamp": time.time()
         }
         
-        results = search_works(query, max_results=max_results, start_year=start_year, end_year=end_year)
+        # Choose search API based on search_source parameter
+        if search_source == "pubmed":
+            results = search_pubmed(query, max_results=max_results, start_year=start_year, end_year=end_year)
+        else:  # default to "core"
+            results = search_works(query, max_results=max_results, start_year=start_year, end_year=end_year)
+            
         if not results:
             search_progress = {
                 "stage": -1,
@@ -141,6 +159,7 @@ def search():
         # Sanitize the filename
         csv_filename = f'{re.sub(r"[^a-zA-Z0-9]", "_", query)}.csv'
         csv_path = os.path.join(DATA_FOLDER, csv_filename)
+        print(f"Will save results to CSV: {csv_path}")
         
         # Update progress - Stage 3: Creating CSV
         search_progress = {
@@ -151,6 +170,23 @@ def search():
         }
         
         processed_results = extract_and_save_to_csv(results, csv_path)
+        
+        # Verify CSV file was created successfully
+        if not os.path.exists(csv_path):
+            print(f"ERROR: CSV file was not created at: {csv_path}")
+            search_progress = {
+                "stage": -1,
+                "sub_stage": 0,
+                "message": "Failed to create CSV file",
+                "timestamp": time.time()
+            }
+            return jsonify({"error": "Failed to create CSV file"}), 500
+        else:
+            print(f"CSV file successfully created at: {csv_path}")
+            # Check if file is empty or has only header
+            file_size = os.path.getsize(csv_path)
+            if file_size < 100:  # Probably just the header or empty
+                print(f"WARNING: CSV file seems very small ({file_size} bytes)")
 
         # Update progress - Stage 4: Complete
         search_progress = {
@@ -172,11 +208,14 @@ def search():
             "total_results": total_results,
             "current_page": page,
             "total_pages": total_pages,
-            "per_page": per_page
+            "per_page": per_page,
+            "search_source": search_source  # Include the search source in the response
         })
 
     except Exception as e:
         print(f"Search error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         search_progress = {
             "stage": -1,
             "sub_stage": 0,
@@ -188,12 +227,20 @@ def search():
 @app.route("/search_progress", methods=["GET"])
 def get_search_progress():
     """Endpoint to get the current search progress"""
-    return jsonify(search_progress)
+    response = jsonify(search_progress)
+    # response.headers.add('Access-Control-Allow-Origin', '*')
+    # response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    # response.headers.add('Access-Control-Allow-Methods', 'GET,OPTIONS')
+    return response
 
 @app.route("/embedding_progress", methods=["GET"])
 def get_embedding_progress():
     """Endpoint to get the current embedding progress"""
-    return jsonify(embedding_progress)
+    response = jsonify(embedding_progress)
+    # response.headers.add('Access-Control-Allow-Origin', '*')
+    # response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    # response.headers.add('Access-Control-Allow-Methods', 'GET,OPTIONS')
+    return response
 
 # --- Download CSV Endpoint ---
 @app.route("/download/<filename>")
@@ -224,12 +271,40 @@ def get_csv_data(filename):
             
             for row in reader:
                 try:
+                    # Get the keywords value
+                    keyword_value = row.get('Keywords', '')
+                    
+                    # Process keywords based on what we got
+                    if isinstance(keyword_value, list):
+                        # Already a list, use as is
+                        processed_keywords = keyword_value
+                    elif isinstance(keyword_value, str):
+                        # Try to convert from string representation
+                        keyword_str = keyword_value.strip()
+                        if not keyword_str:
+                            processed_keywords = []
+                        elif keyword_str.startswith('[') and keyword_str.endswith(']'):
+                            # Looks like a list representation, try to parse it
+                            try:
+                                # Replace single quotes with double quotes for JSON parsing
+                                json_ready = keyword_str.replace("'", '"')
+                                processed_keywords = json.loads(json_ready)
+                            except:
+                                # If parsing fails, split by comma
+                                processed_keywords = [k.strip() for k in keyword_str.strip('[]').split(',') if k.strip()]
+                        else:
+                            # Not a list format, split by comma
+                            processed_keywords = [k.strip() for k in keyword_str.split(',') if k.strip()]
+                    else:
+                        # Unknown format, use empty list
+                        processed_keywords = []
+                    
                     paper = {
                         'source': str(row.get('Source', '')).strip() or 'Unknown',
                         'title': str(row.get('Title', '')).strip() or 'Unknown',
                         'download_url': str(row.get('Download_URL', '')).strip() or '',
                         'year': str(row.get('Year_Published', '')).strip() or 'Unknown',
-                        'keywords': str(row.get('Keywords', '')).strip() or '[]'
+                        'keywords': processed_keywords  # Now this is an actual list
                     }
                     chunk.append(paper)
                     
@@ -265,33 +340,135 @@ def get_paginated_results():
         per_page = int(request.args.get("per_page", 10))
         
         if not csv_filename:
+            print("Error: Filename parameter is missing")
             return jsonify({"error": "Filename parameter is required"}), 400
             
         csv_path = os.path.join(DATA_FOLDER, csv_filename)
         if not os.path.exists(csv_path):
             print(f"CSV file not found: {csv_path}")
+            # List all files in the data folder for debugging
+            print(f"Files in {DATA_FOLDER} directory:")
+            if os.path.exists(DATA_FOLDER):
+                for file in os.listdir(DATA_FOLDER):
+                    print(f"  - {file} ({os.path.getsize(os.path.join(DATA_FOLDER, file))} bytes)")
+            else:
+                print(f"  Data directory {DATA_FOLDER} doesn't exist")
             return jsonify({"error": "CSV file not found"}), 404
+
+        # Check if file is empty
+        if os.path.getsize(csv_path) == 0:
+            print(f"CSV file is empty: {csv_path}")
+            return jsonify({"error": "CSV file is empty"}), 404
 
         papers = []
         print(f"Reading CSV file: {csv_path}")
         
         # Read CSV in chunks to handle large files
-        with open(csv_path, 'r', encoding='utf-8-sig') as file:
-            reader = csv.DictReader(file)
-            
-            for row in reader:
-                try:
-                    paper = {
-                        'source': str(row.get('Source', '')).strip() or 'Unknown',
-                        'title': str(row.get('Title', '')).strip() or 'Unknown',
-                        'download_url': str(row.get('Download_URL', '')).strip() or '',
-                        'year': str(row.get('Year_Published', '')).strip() or 'Unknown',
-                        'keywords': str(row.get('Keywords', '')).strip() or '[]'
-                    }
-                    papers.append(paper)
-                except Exception as row_error:
-                    print(f"Error processing row: {row} - Error: {str(row_error)}")
-                    continue
+        try:
+            with open(csv_path, 'r', encoding='utf-8-sig') as file:
+                reader = csv.DictReader(file)
+                
+                # Check if we could read the headers
+                if not reader.fieldnames:
+                    print(f"CSV file has no headers: {csv_path}")
+                    return jsonify({"error": "CSV file is invalid (no headers)"}), 400
+                
+                for row in reader:
+                    try:
+                        # Get the keywords value
+                        keyword_value = row.get('Keywords', '')
+                        
+                        # Process keywords based on what we got
+                        if isinstance(keyword_value, list):
+                            # Already a list, use as is
+                            processed_keywords = keyword_value
+                        elif isinstance(keyword_value, str):
+                            # Try to convert from string representation
+                            keyword_str = keyword_value.strip()
+                            if not keyword_str:
+                                processed_keywords = []
+                            elif keyword_str.startswith('[') and keyword_str.endswith(']'):
+                                # Looks like a list representation, try to parse it
+                                try:
+                                    # Replace single quotes with double quotes for JSON parsing
+                                    json_ready = keyword_str.replace("'", '"')
+                                    processed_keywords = json.loads(json_ready)
+                                except:
+                                    # If parsing fails, split by comma
+                                    processed_keywords = [k.strip() for k in keyword_str.strip('[]').split(',') if k.strip()]
+                            else:
+                                # Not a list format, split by comma
+                                processed_keywords = [k.strip() for k in keyword_str.split(',') if k.strip()]
+                        else:
+                            # Unknown format, use empty list
+                            processed_keywords = []
+                        
+                        paper = {
+                            'source': str(row.get('Source', '')).strip() or 'Unknown',
+                            'title': str(row.get('Title', '')).strip() or 'Unknown',
+                            'download_url': str(row.get('Download_URL', '')).strip() or '',
+                            'year': str(row.get('Year_Published', '')).strip() or 'Unknown',
+                            'keywords': processed_keywords  # Now this is an actual list
+                        }
+                        papers.append(paper)
+                    except Exception as row_error:
+                        print(f"Error processing row: {row} - Error: {str(row_error)}")
+                        continue
+        except UnicodeDecodeError:
+            print(f"Unicode decode error reading CSV file: {csv_path}")
+            # Try with a different encoding
+            try:
+                with open(csv_path, 'r', encoding='latin-1') as file:
+                    reader = csv.DictReader(file)
+                    for row in reader:
+                        try:
+                            # Get the keywords value
+                            keyword_value = row.get('Keywords', '')
+                            
+                            # Process keywords based on what we got
+                            if isinstance(keyword_value, list):
+                                # Already a list, use as is
+                                processed_keywords = keyword_value
+                            elif isinstance(keyword_value, str):
+                                # Try to convert from string representation
+                                keyword_str = keyword_value.strip()
+                                if not keyword_str:
+                                    processed_keywords = []
+                                elif keyword_str.startswith('[') and keyword_str.endswith(']'):
+                                    # Looks like a list representation, try to parse it
+                                    try:
+                                        # Replace single quotes with double quotes for JSON parsing
+                                        json_ready = keyword_str.replace("'", '"')
+                                        processed_keywords = json.loads(json_ready)
+                                    except:
+                                        # If parsing fails, split by comma
+                                        processed_keywords = [k.strip() for k in keyword_str.strip('[]').split(',') if k.strip()]
+                                else:
+                                    # Not a list format, split by comma
+                                    processed_keywords = [k.strip() for k in keyword_str.split(',') if k.strip()]
+                            else:
+                                # Unknown format, use empty list
+                                processed_keywords = []
+                            
+                            paper = {
+                                'source': str(row.get('Source', '')).strip() or 'Unknown',
+                                'title': str(row.get('Title', '')).strip() or 'Unknown',
+                                'download_url': str(row.get('Download_URL', '')).strip() or '',
+                                'year': str(row.get('Year_Published', '')).strip() or 'Unknown',
+                                'keywords': processed_keywords  # Now this is an actual list
+                            }
+                            papers.append(paper)
+                        except Exception as row_error:
+                            print(f"Error processing row: {row} - Error: {str(row_error)}")
+                            continue
+            except Exception as e:
+                print(f"Failed to read CSV with latin-1 encoding: {e}")
+                return jsonify({"error": "Cannot read CSV file (encoding issues)"}), 500
+        except Exception as e:
+            print(f"Unexpected error reading CSV file: {e}")
+            import traceback
+            print(traceback.format_exc())
+            return jsonify({"error": f"Error reading CSV file: {str(e)}"}), 500
                     
         if not papers:
             print("No valid papers found in CSV")
@@ -299,9 +476,11 @@ def get_paginated_results():
         
         # Calculate pagination
         total_results = len(papers)
-        total_pages = (total_results + per_page - 1) // per_page  # Ceiling division
-        start_idx = (page - 1) * per_page
+        total_pages = max(1, (total_results + per_page - 1) // per_page)  # Ceiling division, minimum 1 page
+        start_idx = min((page - 1) * per_page, total_results)  # Ensure start_idx is within range
         end_idx = min(start_idx + per_page, total_results)
+        
+        print(f"Found {total_results} papers, returning page {page} of {total_pages} ({end_idx - start_idx} items)")
         
         # Return paginated results
         return jsonify({
@@ -333,7 +512,18 @@ def download_pdfs(filename):
         zip_path = os.path.join(DATA_FOLDER, zip_filename)
         
         # Download PDFs and create zip file
-        download_pdfs_from_csv(csv_file_path, zip_path)
+        success, message = download_pdfs_from_csv(csv_file_path, zip_path)
+        
+        if not success:
+            # Check if the error is about missing scidownl
+            if "scidownl library is not installed" in message:
+                # Return a specific error for missing dependencies
+                return jsonify({
+                    "error": "Missing dependency",
+                    "message": message,
+                    "solution": "Please install scidownl using 'pip install scidownl' on the server."
+                }), 500
+            return jsonify({"error": message}), 500
         
         if not os.path.exists(zip_path):
             return jsonify({"error": "Failed to create zip file"}), 500
@@ -543,7 +733,7 @@ def chat_conversation(filename):
 
         # Search for each sub_query
         all_results_raw = []
-        search_k_per_query = 3 # How many results to fetch per sub-query
+        search_k_per_query = 5 # How many results to fetch per sub-query
         for sub_q in sub_queries:
             try:
                 # Call your existing search function
@@ -605,6 +795,10 @@ def chat_conversation(filename):
             Instructions:
             - Answer the question solely using the information present in the 'Context Documents' section.
             - Do not use any external knowledge or prior assumptions.
+            
+            - **Indentify Intent for Paper Lists*:*
+                - If the user's query explicitly asks for a list of papers that discuss a specific topic, methodology, or concept (e.g., "Which papers discuss agile methodology?", "List papers on software testing frameworks", "What are the papers related to blockchain in IoT?"), your primary goal is to identify and list the **titles** of those relevant papers found within the 'Context Documents'.
+                - In such cases, provide a concise list of paper titles. If no relevant papers are found in the context, clearly state that.
 
             - **Paraphrase and Synthesize:**
                 - **Do NOT copy sentences directly** from the context documents.

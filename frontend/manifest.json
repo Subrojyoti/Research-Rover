@@ -1,0 +1,23 @@
+{
+    "manifest_version": 3,
+    "name": "Research Rover",
+    "version": "1.0",
+    "description": "Research Paper Management Tool",
+    "web_accessible_resources": [{
+      "resources": [
+        "src/assets/*",
+        "src/assets/styles.css",
+        "src/assets/locales/*",
+        "src/assets/locales/en/*",
+        "src/assets/locales/en/translation.json"
+      ],
+      "matches": [
+        "http://localhost:*/*",
+        "https://*.ngrok-free.app/*",
+        "http://localhost:5000/*"
+      ]
+    }],
+    "permissions": [
+      "activeTab"
+    ]
+}

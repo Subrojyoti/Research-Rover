@@ -3,8 +3,16 @@ import axios from 'axios';
 import SearchProgressBar from './SearchProgressBar';
 import EmbeddingProgressBar from './EmbeddingProgressBar';
 import ChatPage from './ChatPage';
-import { Box, styled, Menu, MenuItem } from '@mui/material';
+import { Box, styled, Menu, MenuItem, IconButton } from '@mui/material';
 import {useNavigate, Route} from 'react-router-dom';
+import API from '../api';
+
+// Add a default fallback URL if environment variable is not set
+const backend_addrs = import.meta.env.VITE_API_URL || 'http://localhost:5000'; 
+console.log("Using backend API URL:", backend_addrs);
+
+// Configure axios with timeout
+axios.defaults.timeout = 30000; // 30 seconds timeout
 
 const BackgroundWrapper = styled(Box)({
   position: 'fixed',
@@ -57,6 +65,7 @@ const SearchPage = () => {
     const [maxResults, setMaxResults] = useState('');
     const [startYear, setStartYear] = useState('');
     const [endYear, setEndYear] = useState('');
+    const [isYearRangeExpanded, setIsYearRangeExpanded] = useState(false);
     const [papers, setPapers] = useState([]);
     const [loading, setLoading] = useState(false);
     const [csvLoading, setCsvLoading] = useState(false);
@@ -75,12 +84,20 @@ const SearchPage = () => {
     const [embeddingProgressMessage, setEmbeddingProgressMessage] = useState('');
     const [showChatPage, setShowChatPage] = useState(false);
     const [embeddingFilename, setEmbeddingFilename] = useState('');
+    const [searchSource, setSearchSource] = useState('core'); // Default to CORE API
+    
+    // Add new state for confirmation dialog:
+    const [showConfirmation, setShowConfirmation] = useState(false);
+    const [pendingSearch, setPendingSearch] = useState(false);
+    
+    // Add new state for download confirmation dialog:
+    const [showDownloadConfirmation, setShowDownloadConfirmation] = useState(false);
     
     const navigate = useNavigate();
     // Define the stages of the search process
     const searchStages = [
         { label: 'Initializing', description: 'Setting up search environment' },
-        { label: 'Searching', description: 'Querying CORE API for research papers' },
+        { label: 'Searching', description: `Querying ${searchSource === 'pubmed' ? 'PubMed' : 'CORE'} API for research papers` },
         { label: 'Processing', description: 'Extracting and validating paper information' },
         { label: 'Compiling', description: 'Processing and organizing paper data' },
         { label: 'Complete', description: 'Search process finished' }
@@ -94,6 +111,58 @@ const SearchPage = () => {
         { label: 'Complete', description: 'Embedding process finished' }
     ];
 
+    // Add this style block at the top of the file, after the imports
+    const maxResultsInputStyle = `
+        .max-results-input::placeholder {
+            color: rgba(255, 255, 255, 0.7) !important;
+            opacity: 1 !important;
+        }
+        .max-results-input:focus::placeholder {
+            color: rgba(255, 255, 255, 0.9) !important;
+        }
+    `;
+
+    // Add this style element to the component
+    useEffect(() => {
+        const styleElement = document.createElement('style');
+        styleElement.textContent = `
+            ${maxResultsInputStyle}
+            
+            /* Source dropdown styling */
+            #source-select {
+                background-color: rgba(20, 20, 40, 0.9);
+                font-weight: 500;
+            }
+            #source-select option {
+                background-color: #1a1a2e;
+                color: white !important;
+                padding: 10px;
+                font-weight: 500;
+            }
+            
+            /* For Firefox */
+            @-moz-document url-prefix() {
+                #source-select {
+                    background-color: rgba(20, 20, 40, 0.9);
+                }
+                #source-select option {
+                    background-color: #1a1a2e !important;
+                }
+            }
+            
+            /* For Webkit browsers */
+            @media screen and (-webkit-min-device-pixel-ratio:0) {
+                #source-select option {
+                    background-color: #1a1a2e !important;
+                }
+            }
+        `;
+        document.head.appendChild(styleElement);
+        return () => {
+            document.head.removeChild(styleElement);
+        };
+    }, []);
+
     // Poll for progress updates
     useEffect(() => {
         let intervalId;
@@ -101,7 +170,7 @@ const SearchPage = () => {
         if (loading) {
             intervalId = setInterval(async () => {
                 try {
-                    const response = await axios.get('http://localhost:5000/search_progress');
+                    const response = await axios.get(`${backend_addrs}/search_progress`);
                     const { stage, message } = response.data;
                     
                     // Update the current stage and message
@@ -137,7 +206,7 @@ const SearchPage = () => {
         if (embeddingLoading) {
             intervalId = setInterval(async () => {
                 try {
-                    const response = await axios.get('http://localhost:5000/embedding_progress');
+                    const response = await axios.get(`${backend_addrs}/embedding_progress`);
                     const { stage, message } = response.data;
                     
                     // Update the current stage and message
@@ -176,12 +245,28 @@ const SearchPage = () => {
 
     const handleSearch = async (e) => {
         e.preventDefault();
+        
+        // Check if maxResults is more than 1000 and show confirmation
+        const maxResultsValue = maxResults === "" ? 10 : parseInt(maxResults);
+        if (maxResultsValue > 1000) {
+            setShowConfirmation(true);
+            setPendingSearch(true);
+            return;
+        }
+        
+        // If we get here, either maxResults is <= 1000 or user confirmed
+        await executeSearch();
+    };
+
+    // New function to execute the search
+    const executeSearch = async () => {
         setLoading(true);
         setError(null);
         setPapers([]);
         setCurrentStage(0);
         setProgressMessage('Starting search...');
         setCurrentPage(1); // Reset to first page on new search
+        setPendingSearch(false); // Reset pending search flag
         
         // Ensure we have valid values for the parameters
         const maxResultsValue = maxResults === "" ? 10 : maxResults;
@@ -189,7 +274,14 @@ const SearchPage = () => {
         const endYearValue = endYear === "" ? 0 : endYear;
         
         try {
-            const searchResponse = await axios.get(`http://localhost:5000/search?query=${query}&page=1&per_page=${perPage}&max_results=${maxResultsValue}&start_year=${startYearValue}&end_year=${endYearValue}`);
+            // Properly encode query parameters
+            const encodedQuery = encodeURIComponent(query);
+            const searchURL = `${backend_addrs}/search?query=${encodedQuery}&page=1&per_page=${perPage}&max_results=${maxResultsValue}&start_year=${startYearValue}&end_year=${endYearValue}&search_source=${searchSource}`;
+            
+            console.log("Sending search request to:", searchURL);
+            
+            const searchResponse = await API.get(searchURL);
+            console.log("🔍 Search raw response:", searchResponse.data);
             const csvFilename = searchResponse.data.csv_filename;
             setCsvFilename(csvFilename);
             setPrevQuery(query);
@@ -207,28 +299,45 @@ const SearchPage = () => {
             
             setCsvLoading(true);
             try {
-                const csvResponse = await axios.get(`http://localhost:5000/get_paginated_results?filename=${csvFilename}&page=1&per_page=${perPage}`);
+                console.log(`Fetching CSV data from: ${backend_addrs}/get_paginated_results?filename=${csvFilename}&page=1&per_page=${perPage}`);
+                const csvResponse = await axios.get(`${backend_addrs}/get_paginated_results?filename=${csvFilename}&page=1&per_page=${perPage}`);
                 // Parse the CSV data and extract keywords
                 const parsedPapers = csvResponse.data.results.map(paper => ({
                     ...paper,
-                    // Parse keywords if they're in string format
-                    keywords: paper.keywords ? 
-                        (typeof paper.keywords === 'string' ? 
-                            JSON.parse(paper.keywords.replace(/'/g, '"')) : 
-                            paper.keywords) : 
-                        []
+                    // Keywords should already be a list from the backend now
+                    keywords: Array.isArray(paper.keywords) ? paper.keywords : []
                 }));
                 setPapers(parsedPapers);
                 setTotalPages(csvResponse.data.total_pages || 1);
             } catch (csvError) {
-                console.error('CSV error:', csvError.response?.data);
+                console.error('CSV error:', csvError.response?.data || csvError.message);
+                if (csvError.message && csvError.message.includes('timeout')) {
+                    setError('Request timed out while fetching CSV data. Basic results are still available.');
+                } else if (csvError.response?.status === 404) {
+                    setError('CSV file not found. Please try your search again.');
+                } else {
+                    setError('Error loading detailed results. Basic results are still available.');
+                }
             } finally {
                 setCsvLoading(false);
             }
         } catch (err) {
-            const errorMessage = err.response?.data?.error || err.message || 'Failed to fetch results';
+            console.error('Search error:', err);
+            let errorMessage = '';
+            
+            if (err.message && err.message.includes('timeout')) {
+                errorMessage = 'Search request timed out. Please try a more specific query or reduce the number of results.';
+            } else if (err.message && err.message.includes('Network Error')) {
+                errorMessage = 'Cannot connect to the server. Please check your internet connection and verify the server is running.';
+            } else if (err.response?.status === 404) {
+                errorMessage = 'Search endpoint not found. The server may be misconfigured.';
+            } else if (err.response?.data?.error) {
+                errorMessage = err.response.data.error;
+            } else {
+                errorMessage = 'An unexpected error occurred during search. Please try again later.';
+            }
+            
             setError(errorMessage);
-            console.error('Search error:', errorMessage);
         } finally {
             setLoading(false);
         }
@@ -244,14 +353,11 @@ const SearchPage = () => {
             // Load the results for this filename
             const loadResults = async () => {
                 try {
-                    const csvResponse = await axios.get(`http://localhost:5000/get_paginated_results?filename=${filenameFromUrl}&page=1&per_page=${perPage}`);
+                    const csvResponse = await axios.get(`${backend_addrs}/get_paginated_results?filename=${filenameFromUrl}&page=1&per_page=${perPage}`);
                     const parsedPapers = csvResponse.data.results.map(paper => ({
                         ...paper,
-                        keywords: paper.keywords ? 
-                            (typeof paper.keywords === 'string' ? 
-                                JSON.parse(paper.keywords.replace(/'/g, '"')) : 
-                                paper.keywords) : 
-                            []
+                        // Keywords should already be a list from the backend now
+                        keywords: Array.isArray(paper.keywords) ? paper.keywords : []
                     }));
                     setPapers(parsedPapers);
                     setTotalPages(csvResponse.data.total_pages || 1);
@@ -274,13 +380,20 @@ const SearchPage = () => {
 
     const handleDownloadCSV = () => {
         handleClose();
-        window.location.href = `http://localhost:5000/download/${csvFilename}`;
+        window.location.href = `${backend_addrs}/download/${csvFilename}`;
     };
 
     const handleDownloadPDFs = () => {
         handleClose();
-        // Use the new endpoint to download PDFs as a zip file
-        window.location.href = `http://localhost:5000/download_pdfs/${csvFilename}`;
+        // Show confirmation dialog before proceeding with download
+        setShowDownloadConfirmation(true);
+    };
+    
+    // New function to actually download PDFs after confirmation
+    const executeDownloadPDFs = () => {
+        setShowDownloadConfirmation(false);
+        // Use the endpoint to download PDFs as a zip file
+        window.location.href = `${backend_addrs}/download_pdfs/${csvFilename}`;
     };
 
     const handlePageChange = async (newPage) => {
@@ -288,18 +401,14 @@ const SearchPage = () => {
         
         setLoading(true);
         try {
-            const response = await axios.get(`http://localhost:5000/get_paginated_results?filename=${csvFilename}&page=${newPage}&per_page=${perPage}`);
+            const response = await axios.get(`${backend_addrs}/get_paginated_results?filename=${csvFilename}&page=${newPage}&per_page=${perPage}`);
             
             navigate(`/search?filename=${csvFilename}&page=${newPage}`, { replace: true });
             // Parse the CSV data and extract keywords
             const parsedPapers = response.data.results.map(paper => ({
                 ...paper,
-                // Parse keywords if they're in string format
-                keywords: paper.keywords ? 
-                    (typeof paper.keywords === 'string' ? 
-                        JSON.parse(paper.keywords.replace(/'/g, '"')) : 
-                        paper.keywords) : 
-                    []
+                // Keywords should already be a list from the backend now
+                keywords: Array.isArray(paper.keywords) ? paper.keywords : []
             }));
             
             setPapers(parsedPapers);
@@ -388,8 +497,66 @@ const SearchPage = () => {
                                 }}>
                                     <div className="search-input-group" style={{
                                         position: 'relative',
-                                        flex: '1'
+                                        flex: '1',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '10px'
                                     }}>
+                                        {/* Source selection dropdown with clear label */}
+                                        <div style={{
+                                            display: 'flex', 
+                                            alignItems: 'center',
+                                            background: 'rgba(20, 20, 40, 0.7)',
+                                            borderRadius: '25px',
+                                            padding: '2px 2px 2px 12px',
+                                            border: '1px solid rgba(255, 255, 255, 0.3)',
+                                            height: '40px', // Match search box height
+                                            boxSizing: 'border-box'
+                                        }}>
+                                            <span style={{
+                                                color: 'white',
+                                                fontSize: '14px',
+                                                fontWeight: '500',
+                                                marginRight: '6px',
+                                                whiteSpace: 'nowrap'
+                                            }}>Source:</span>
+                                            <select
+                                                id="source-select"
+                                                value={searchSource}
+                                                onChange={(e) => setSearchSource(e.target.value)}
+                                                style={{
+                                                    padding: '0px 30px 0px 5px',
+                                                    fontSize: '14px',
+                                                    backgroundColor: 'transparent',
+                                                    border: 'none',
+                                                    outline: 'none',
+                                                    transition: 'all 0.3s ease',
+                                                    color: 'white',
+                                                    appearance: 'none',
+                                                    WebkitAppearance: 'none',
+                                                    MozAppearance: 'none',
+                                                    backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")`,
+                                                    backgroundRepeat: 'no-repeat',
+                                                    backgroundPosition: 'right 2px center',
+                                                    backgroundSize: '16px',
+                                                    cursor: 'pointer',
+                                                    width: '90px',
+                                                    fontWeight: '600'
+                                                }}
+                                            >
+                                                <option value="core" style={{
+                                                    backgroundColor: '#1a1a2e',
+                                                    color: 'white',
+                                                    padding: '8px'
+                                                }}>ALL</option>
+                                                <option value="pubmed" style={{
+                                                    backgroundColor: '#1a1a2e',
+                                                    color: 'white',
+                                                    padding: '8px'
+                                                }}>PubMed</option>
+                                            </select>
+                                        </div>
+                                        
                                         <input
                                             type="text"
                                             id="query"
@@ -399,7 +566,7 @@ const SearchPage = () => {
                                             placeholder="Search for research papers..."
                                             style={{
                                                 width: '100%',
-                                                padding: '10px 40px 10px 16px',
+                                                padding: '10px 170px 10px 16px',
                                                 fontSize: '15px',
                                                 backgroundColor: 'rgba(255, 255, 255, 0.15)',
                                                 border: '1px solid rgba(255, 255, 255, 0.3)',
@@ -407,7 +574,11 @@ const SearchPage = () => {
                                                 outline: 'none',
                                                 transition: 'all 0.3s ease',
                                                 color: 'white',
-                                                caretColor: 'white'
+                                                caretColor: 'white',
+                                                boxSizing: 'border-box',
+                                                flex: 1,
+                                                minWidth: 0,
+                                                height: '40px' // Match dropdown height
                                             }}
                                             onFocus={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'}
                                             onBlur={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.15)'}
@@ -419,19 +590,18 @@ const SearchPage = () => {
                                             value={maxResults}
                                             onChange={(e) => {
                                                 const value = e.target.value;
-                                                // If the input is empty, set the state your desired default
                                                 if (value === "") {
                                                     setMaxResults("");
                                                 } else {
                                                     const parsedValue = parseInt(value);
-                                                    // Update the state only if the parsed value is a valid number
                                                     if (!isNaN(parsedValue) && parsedValue >=1) {
                                                         setMaxResults(parsedValue);
                                                     }
                                                 }
                                             }}
-                                            placeholder="Max Results"
+                                            placeholder="# Papers"
                                             min="1"
+                                            maxLength={7}
                                             style={{
                                                 position: 'absolute',
                                                 right: '40px',
@@ -450,9 +620,13 @@ const SearchPage = () => {
                                                 textAlign: 'center',
                                                 height: '30px',
                                                 lineHeight: '1',
+                                                overflow: 'hidden',
+                                                textOverflow: 'ellipsis',
+                                                whiteSpace: 'nowrap'
                                             }}
                                             onFocus={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'}
                                             onBlur={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.15)'}
+                                            className="max-results-input"
                                         />
                                         <button 
                                             type="submit"
@@ -487,86 +661,124 @@ const SearchPage = () => {
                                         </button>
                                     </div>
                                     
-                                    <div className="year-filters" style={{
+                                    <div className="year-range-container" style={{
                                         display: 'flex',
                                         alignItems: 'center',
-                                        gap: '5px'
+                                        gap: '8px',
+                                        backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                                        padding: '4px 12px',
+                                        borderRadius: '20px',
+                                        border: '1px solid rgba(255, 255, 255, 0.2)',
+                                        transition: 'all 0.3s ease',
+                                        width: isYearRangeExpanded ? 'auto' : 'auto',
+                                        overflow: 'hidden'
                                     }}>
-                                        {/* <label style={{
+                                        <div style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '8px',
+                                            cursor: 'pointer',
                                             color: 'white',
-                                            fontSize: '14px'
-                                        }}>Year:</label> */}
-                                        <input
-                                            type="number"
-                                            id="startYear"
-                                            name="startYear"
-                                            value={startYear}
-                                            onChange={(e) => {
-                                                const value = e.target.value;
-                                                if (value === "") {
-                                                    setStartYear("");
-                                                } else {
-                                                    const parsedValue = parseInt(value);
-                                                    if (!isNaN(parsedValue) && parsedValue >= 0) {
-                                                        setStartYear(parsedValue);
-                                                    }
-                                                }
-                                            }}
-                                            placeholder="From"
-                                            min="0"
-                                            style={{
-                                                width: '70px',
-                                                padding: '8px',
-                                                fontSize: '14px',
-                                                backgroundColor: 'rgba(255, 255, 255, 0.15)',
-                                                border: '1px solid rgba(255, 255, 255, 0.3)',
-                                                borderRadius: '15px',
-                                                outline: 'none',
-                                                transition: 'all 0.3s ease',
-                                                color: 'white',
-                                                caretColor: 'white',
-                                                textAlign: 'center'
-                                            }}
-                                            onFocus={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'}
-                                            onBlur={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.15)'}
-                                        />
-                                        <span style={{ color: 'white' }}>-</span>
-                                        <input
-                                            type="number"
-                                            id="endYear"
-                                            name="endYear"
-                                            value={endYear}
-                                            onChange={(e) => {
-                                                const value = e.target.value;
-                                                // If the input is empty, set the state to 0 (or your desired default)
-                                                if (value === "") {
-                                                    setEndYear("");
-                                                } else {
-                                                    const parsedValue = parseInt(value);
-                                                    // Update the state only if the parsed value is a valid number
-                                                    if (!isNaN(parsedValue && parsedValue >= 0)) {
-                                                        setEndYear(parsedValue);
-                                                    }
-                                                }
-                                            }}
-                                            placeholder="To"
-                                            min="0"
-                                            style={{
-                                                width: '70px',
-                                                padding: '8px',
-                                                fontSize: '14px',
-                                                backgroundColor: 'rgba(255, 255, 255, 0.15)',
-                                                border: '1px solid rgba(255, 255, 255, 0.3)',
-                                                borderRadius: '15px',
-                                                outline: 'none',
-                                                transition: 'all 0.3s ease',
-                                                color: 'white',
-                                                caretColor: 'white',
-                                                textAlign: 'center'
-                                            }}
-                                            onFocus={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'}
-                                            onBlur={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.15)'}
-                                        />
+                                            fontSize: '14px',
+                                            fontWeight: '500'
+                                        }}
+                                        onClick={() => setIsYearRangeExpanded(!isYearRangeExpanded)}>
+                                            <span>Year Range</span>
+                                            <IconButton 
+                                                size="small"
+                                                style={{
+                                                    color: 'white',
+                                                    padding: '2px',
+                                                    transform: isYearRangeExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                                                    transition: 'transform 0.3s ease'
+                                                }}
+                                            >
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                    <path d="M8.59 16.59L10 18l6-6-6-6-1.41 1.41L13.17 12z" fill="currentColor"/>
+                                                </svg>
+                                            </IconButton>
+                                        </div>
+                                        
+                                        {isYearRangeExpanded && (
+                                            <div className="year-filters" style={{
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '5px',
+                                                marginLeft: '8px',
+                                                paddingLeft: '8px',
+                                                borderLeft: '1px solid rgba(255, 255, 255, 0.2)'
+                                            }}>
+                                                <input
+                                                    type="number"
+                                                    id="startYear"
+                                                    name="startYear"
+                                                    value={startYear}
+                                                    onChange={(e) => {
+                                                        const value = e.target.value;
+                                                        if (value === "") {
+                                                            setStartYear("");
+                                                        } else {
+                                                            const parsedValue = parseInt(value);
+                                                            if (!isNaN(parsedValue) && parsedValue >= 0) {
+                                                                setStartYear(parsedValue);
+                                                            }
+                                                        }
+                                                    }}
+                                                    placeholder="YYYY"
+                                                    min="0"
+                                                    style={{
+                                                        width: '70px',
+                                                        padding: '8px',
+                                                        fontSize: '14px',
+                                                        backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                                                        border: '1px solid rgba(255, 255, 255, 0.3)',
+                                                        borderRadius: '15px',
+                                                        outline: 'none',
+                                                        transition: 'all 0.3s ease',
+                                                        color: 'white',
+                                                        caretColor: 'white',
+                                                        textAlign: 'center'
+                                                    }}
+                                                    onFocus={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'}
+                                                    onBlur={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.15)'}
+                                                />
+                                                <span style={{ color: 'white' }}>-</span>
+                                                <input
+                                                    type="number"
+                                                    id="endYear"
+                                                    name="endYear"
+                                                    value={endYear}
+                                                    onChange={(e) => {
+                                                        const value = e.target.value;
+                                                        if (value === "") {
+                                                            setEndYear("");
+                                                        } else {
+                                                            const parsedValue = parseInt(value);
+                                                            if (!isNaN(parsedValue && parsedValue >= 0)) {
+                                                                setEndYear(parsedValue);
+                                                            }
+                                                        }
+                                                    }}
+                                                    placeholder="YYYY"
+                                                    min="0"
+                                                    style={{
+                                                        width: '70px',
+                                                        padding: '8px',
+                                                        fontSize: '14px',
+                                                        backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                                                        border: '1px solid rgba(255, 255, 255, 0.3)',
+                                                        borderRadius: '15px',
+                                                        outline: 'none',
+                                                        transition: 'all 0.3s ease',
+                                                        color: 'white',
+                                                        caretColor: 'white',
+                                                        textAlign: 'center'
+                                                    }}
+                                                    onFocus={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)'}
+                                                    onBlur={(e) => e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.15)'}
+                                                />
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </form>
@@ -574,6 +786,204 @@ const SearchPage = () => {
                             {error && (
                                 <div className="error-message">
                                     {error}
+                                </div>
+                            )}
+                            
+                            {/* Confirmation Dialog for Large # Papers */}
+                            {showConfirmation && (
+                                <div style={{
+                                    position: 'fixed',
+                                    top: 0,
+                                    left: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                                    backdropFilter: 'blur(5px)',
+                                    display: 'flex',
+                                    justifyContent: 'center',
+                                    alignItems: 'center',
+                                    zIndex: 2000,
+                                    padding: '20px'
+                                }}>
+                                    <div style={{
+                                        backgroundColor: '#1a1a2e',
+                                        borderRadius: '12px',
+                                        padding: '24px',
+                                        maxWidth: '450px',
+                                        border: '1px solid rgba(255, 255, 255, 0.2)',
+                                        boxShadow: '0 10px 30px rgba(0, 0, 0, 0.5)'
+                                    }}>
+                                        <h3 style={{
+                                            fontSize: '1.2rem',
+                                            color: 'white',
+                                            marginTop: 0,
+                                            marginBottom: '16px'
+                                        }}>Large Number of Papers</h3>
+                                        
+                                        <p style={{
+                                            fontSize: '0.9rem',
+                                            color: 'rgba(255, 255, 255, 0.8)',
+                                            marginBottom: '20px',
+                                            lineHeight: '1.5'
+                                        }}>
+                                            You've requested <strong style={{ color: '#4CAF50' }}>{maxResults}</strong> papers. 
+                                            Retrieving a large number of papers may take longer to process and could impact 
+                                            performance. Would you like to continue?
+                                        </p>
+                                        
+                                        <div style={{
+                                            display: 'flex',
+                                            justifyContent: 'flex-end',
+                                            gap: '12px'
+                                        }}>
+                                            <button 
+                                                onClick={() => {
+                                                    setShowConfirmation(false);
+                                                    setPendingSearch(false);
+                                                }}
+                                                style={{
+                                                    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                                                    color: 'white',
+                                                    border: 'none',
+                                                    padding: '8px 16px',
+                                                    borderRadius: '6px',
+                                                    cursor: 'pointer',
+                                                    fontSize: '0.9rem',
+                                                    transition: 'all 0.2s ease'
+                                                }}
+                                                onMouseOver={(e) => {
+                                                    e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.25)';
+                                                }}
+                                                onMouseOut={(e) => {
+                                                    e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.15)';
+                                                }}
+                                            >
+                                                Cancel
+                                            </button>
+                                            <button 
+                                                onClick={() => {
+                                                    setShowConfirmation(false);
+                                                    executeSearch();
+                                                }}
+                                                style={{
+                                                    backgroundColor: '#4CAF50',
+                                                    color: 'white',
+                                                    border: 'none',
+                                                    padding: '8px 16px',
+                                                    borderRadius: '6px',
+                                                    cursor: 'pointer',
+                                                    fontSize: '0.9rem',
+                                                    fontWeight: '500',
+                                                    transition: 'all 0.2s ease'
+                                                }}
+                                                onMouseOver={(e) => {
+                                                    e.target.style.backgroundColor = '#3e8e41';
+                                                }}
+                                                onMouseOut={(e) => {
+                                                    e.target.style.backgroundColor = '#4CAF50';
+                                                }}
+                                            >
+                                                Continue
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {/* Confirmation Dialog for PDF Downloads */}
+                            {showDownloadConfirmation && (
+                                <div style={{
+                                    position: 'fixed',
+                                    top: 0,
+                                    left: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                                    backdropFilter: 'blur(5px)',
+                                    display: 'flex',
+                                    justifyContent: 'center',
+                                    alignItems: 'center',
+                                    zIndex: 2000,
+                                    padding: '20px'
+                                }}>
+                                    <div style={{
+                                        backgroundColor: '#1a1a2e',
+                                        borderRadius: '12px',
+                                        padding: '24px',
+                                        maxWidth: '450px',
+                                        border: '1px solid rgba(255, 255, 255, 0.2)',
+                                        boxShadow: '0 10px 30px rgba(0, 0, 0, 0.5)'
+                                    }}>
+                                        <h3 style={{
+                                            fontSize: '1.2rem',
+                                            color: 'white',
+                                            marginTop: 0,
+                                            marginBottom: '16px'
+                                        }}>Download Multiple PDFs</h3>
+                                        
+                                        <p style={{
+                                            fontSize: '0.9rem',
+                                            color: 'rgba(255, 255, 255, 0.8)',
+                                            marginBottom: '20px',
+                                            lineHeight: '1.5'
+                                        }}>
+                                            Downloading all PDFs may take a significant amount of time depending on 
+                                            the number of papers and their size. The server will package them into a zip file.
+                                            Would you like to continue?
+                                        </p>
+                                        
+                                        <div style={{
+                                            display: 'flex',
+                                            justifyContent: 'flex-end',
+                                            gap: '12px'
+                                        }}>
+                                            <button 
+                                                onClick={() => {
+                                                    setShowDownloadConfirmation(false);
+                                                }}
+                                                style={{
+                                                    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                                                    color: 'white',
+                                                    border: 'none',
+                                                    padding: '8px 16px',
+                                                    borderRadius: '6px',
+                                                    cursor: 'pointer',
+                                                    fontSize: '0.9rem',
+                                                    transition: 'all 0.2s ease'
+                                                }}
+                                                onMouseOver={(e) => {
+                                                    e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.25)';
+                                                }}
+                                                onMouseOut={(e) => {
+                                                    e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.15)';
+                                                }}
+                                            >
+                                                Cancel
+                                            </button>
+                                            <button 
+                                                onClick={executeDownloadPDFs}
+                                                style={{
+                                                    backgroundColor: '#4CAF50',
+                                                    color: 'white',
+                                                    border: 'none',
+                                                    padding: '8px 16px',
+                                                    borderRadius: '6px',
+                                                    cursor: 'pointer',
+                                                    fontSize: '0.9rem',
+                                                    fontWeight: '500',
+                                                    transition: 'all 0.2s ease'
+                                                }}
+                                                onMouseOver={(e) => {
+                                                    e.target.style.backgroundColor = '#3e8e41';
+                                                }}
+                                                onMouseOut={(e) => {
+                                                    e.target.style.backgroundColor = '#4CAF50';
+                                                }}
+                                            >
+                                                Continue Download
+                                            </button>
+                                        </div>
+                                    </div>
                                 </div>
                             )}
                             
@@ -590,454 +1000,443 @@ const SearchPage = () => {
                             )}
                         </div>
 
-                        {papers.length > 0 && (
-                            <>
-                                <div className="results-section" style={{ 
-                                    position: 'relative',
-                                    width: '90%',
-                                    maxWidth: '1200px',
-                                    margin: '0 auto',
-                                    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                                    backdropFilter: 'blur(10px)',
-                                    borderRadius: '16px',
-                                    padding: '1.5rem',
-                                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                                    border: '1px solid rgba(255, 255, 255, 0.2)',
-                                    zIndex: 1,
-                                    transition: 'all 0.5s ease-in-out',
-                                    opacity: 0,
-                                    animation: 'fadeIn 0.5s ease-in-out forwards 0.3s'
-                                }}>
-                                    <div className="results-header">
-                                        <h3 className="results-title" style={{
-                                            fontSize: '1.4rem',
-                                            fontWeight: '700',
-                                            color: 'white',
-                                            marginBottom: '1rem',
-                                            textShadow: '0 2px 4px rgba(0,0,0,0.2)'
-                                        }}>Search Results</h3>
-                                        <div className="results-summary" style={{ 
-                                            marginBottom: '1.5rem',
-                                            padding: '1rem',
-                                            backgroundColor: 'rgba(255, 255, 255, 0.15)',
-                                            borderRadius: '12px',
-                                            border: '1px solid rgba(255, 255, 255, 0.2)',
-                                            display: 'flex',
-                                            flexDirection: 'column',
+                        {/* Results section - This is the missing code that displays papers */}
+                        {papers.length > 0 && !loading && !embeddingLoading && (
+                            <div className="results-section" style={{
+                                margin: '9rem auto 2rem auto',
+                                width: '90%',
+                                maxWidth: '1200px',
+                                backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                                backdropFilter: 'blur(10px)',
+                                padding: '2rem',
+                                borderRadius: '16px',
+                                border: '1px solid rgba(255, 255, 255, 0.2)'
+                            }}>
+
+                                <div className="results-header">
+                                    <h3 className="results-title" style={{
+                                        fontSize: '1.4rem',
+                                        fontWeight: '700',
+                                        color: 'white',
+                                        marginBottom: '1rem',
+                                        textShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                                    }}>Search Results</h3>
+                                    <div className="results-summary" style={{ 
+                                        marginBottom: '1.5rem',
+                                        padding: '1rem',
+                                        backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                                        borderRadius: '12px',
+                                        border: '1px solid rgba(255, 255, 255, 0.2)',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: '8px'
+                                    }}>
+                                        <div style={{ 
+                                            display: 'flex', 
+                                            alignItems: 'center',
                                             gap: '8px'
                                         }}>
-                                            <div style={{ 
-                                                display: 'flex', 
-                                                alignItems: 'center',
-                                                gap: '8px'
-                                            }}>
-                                                <span style={{ 
-                                                    backgroundColor: '#4CAF50',
-                                                    color: 'white',
-                                                    padding: '4px 10px',
-                                                    borderRadius: '16px',
-                                                    fontSize: '0.9rem',
-                                                    fontWeight: '600',
-                                                    boxShadow: '0 2px 4px rgba(76, 175, 80, 0.2)'
-                                                }}>
-                                                    {totalResults}
-                                                </span>
-                                                <span style={{ 
-                                                    fontSize: '0.9rem',
-                                                    color: 'white',
-                                                    fontWeight: '500'
-                                                }}>
-                                                    results found for
-                                                </span>
-                                                <span style={{ 
-                                                    fontSize: '0.9rem',
-                                                    color: 'white',
-                                                    fontWeight: '600',
-                                                    fontStyle: 'italic'
-                                                }}>
-                                                    "{prevquery}"
-                                                </span>
-                                            </div>
-                                            <div style={{ 
+                                            <span style={{ 
+                                                backgroundColor: '#4CAF50',
                                                 color: 'white',
+                                                padding: '4px 10px',
+                                                borderRadius: '16px',
+                                                fontSize: '0.9rem',
+                                                fontWeight: '600',
+                                                boxShadow: '0 2px 4px rgba(76, 175, 80, 0.2)'
+                                            }}>
+                                                {totalResults}
+                                            </span>
+                                            <span style={{ 
+                                                fontSize: '0.9rem',
+                                                color: 'white',
+                                                fontWeight: '500'
+                                            }}>
+                                                results found for
+                                            </span>
+                                            <span style={{ 
+                                                fontSize: '0.9rem',
+                                                color: 'white',
+                                                fontWeight: '600',
+                                                fontStyle: 'italic'
+                                            }}>
+                                                "{prevquery}"
+                                            </span>
+                                        </div>
+                                        <div style={{ 
+                                            color: 'white',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '6px',
+                                            fontSize: '0.8rem'
+                                        }}>
+                                            <span style={{ 
+                                                width: '6px',
+                                                height: '6px',
+                                                borderRadius: '50%',
+                                                backgroundColor: '#4CAF50',
+                                                display: 'inline-block',
+                                                boxShadow: '0 0 8px rgba(76, 175, 80, 0.4)'
+                                            }}></span>
+                                            Showing {papers.length} results (Page {currentPage} of {totalPages})
+                                        </div>
+                                    </div>
+                                    <div className="results-actions">
+                                        <button
+                                            onClick={handleDownloadClick}
+                                            className="btn btn-secondary"
+                                            style={{
                                                 display: 'flex',
                                                 alignItems: 'center',
-                                                gap: '6px',
-                                                fontSize: '0.8rem'
-                                            }}>
-                                                <span style={{ 
-                                                    width: '6px',
-                                                    height: '6px',
-                                                    borderRadius: '50%',
-                                                    backgroundColor: '#4CAF50',
-                                                    display: 'inline-block',
-                                                    boxShadow: '0 0 8px rgba(76, 175, 80, 0.4)'
-                                                }}></span>
-                                                Showing {papers.length} results (Page {currentPage} of {totalPages})
-                                            </div>
-                                        </div>
-                                        <div className="results-actions">
-                                            <button
-                                                onClick={handleDownloadClick}
-                                                className="btn btn-secondary"
-                                                style={{
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    gap: '8px',
-                                                    padding: '12px 20px',
-                                                    backgroundColor: '#4CAF50',
-                                                    color: 'white',
-                                                    border: 'none',
-                                                    borderRadius: '12px',
-                                                    fontSize: '15px',
-                                                    fontWeight: '600',
-                                                    cursor: 'pointer',
-                                                    transition: 'all 0.3s ease',
-                                                    boxShadow: '0 2px 4px rgba(76, 175, 80, 0.2)'
-                                                }}
-                                                onMouseOver={(e) => {
-                                                    e.target.style.backgroundColor = '#3e8e41';
-                                                    e.target.style.boxShadow = '0 4px 8px rgba(76, 175, 80, 0.3)';
-                                                    e.target.style.transform = 'translateY(-2px)';
-                                                }}
-                                                onMouseOut={(e) => {
-                                                    e.target.style.backgroundColor = '#4CAF50';
-                                                    e.target.style.boxShadow = '0 2px 4px rgba(76, 175, 80, 0.2)';
-                                                    e.target.style.transform = 'translateY(0)';
-                                                }}
-                                            >
-                                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                                    <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="currentColor"/>
-                                                </svg>
-                                                Download
-                                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ marginLeft: '4px' }}>
-                                                    <path d="M7 10l5 5 5-5z" fill="currentColor"/>
-                                                </svg>
-                                            </button>
-                                            <Menu
-                                                anchorEl={anchorEl}
-                                                open={open}
-                                                onClose={handleClose}
-                                                anchorOrigin={{
-                                                    vertical: 'bottom',
-                                                    horizontal: 'right',
-                                                }}
-                                                transformOrigin={{
-                                                    vertical: 'top',
-                                                    horizontal: 'right',
-                                                }}
-                                                componentsProps={{
-                                                    style: {
-                                                        backgroundColor: 'white',
-                                                        borderRadius: '8px',
-                                                        marginTop: '8px',
-                                                        boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                                                    }
-                                                }}
-                                            >
-                                                <MenuItem 
-                                                    onClick={handleDownloadCSV}
-                                                    style={{
-                                                        padding: '10px 20px',
-                                                        fontSize: '14px',
-                                                        display: 'flex',
-                                                        alignItems: 'center',
-                                                        gap: '8px',
-                                                        color: '#2c3e50',
-                                                        transition: 'all 0.2s ease',
-                                                    }}
-                                                    onMouseOver={(e) => {
-                                                        e.target.style.backgroundColor = 'rgba(76, 175, 80, 0.1)';
-                                                    }}
-                                                    onMouseOut={(e) => {
-                                                        e.target.style.backgroundColor = 'transparent';
-                                                    }}
-                                                >
-                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                                        <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="#4CAF50"/>
-                                                    </svg>
-                                                    Download CSV
-                                                </MenuItem>
-                                                <MenuItem 
-                                                    onClick={handleDownloadPDFs}
-                                                    style={{
-                                                        padding: '10px 20px',
-                                                        fontSize: '14px',
-                                                        display: 'flex',
-                                                        alignItems: 'center',
-                                                        gap: '8px',
-                                                        color: '#2c3e50',
-                                                        transition: 'all 0.2s ease',
-                                                    }}
-                                                    onMouseOver={(e) => {
-                                                        e.target.style.backgroundColor = 'rgba(76, 175, 80, 0.1)';
-                                                    }}
-                                                    onMouseOut={(e) => {
-                                                        e.target.style.backgroundColor = 'transparent';
-                                                    }}
-                                                >
-                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                                        <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="#4CAF50"/>
-                                                    </svg>
-                                                    Download PDFs
-                                                </MenuItem>
-                                            </Menu>
-                                            {csvLoading && (
-                                                <span className="loading-indicator" style={{
-                                                    color: '#2c3e50',
-                                                    fontSize: '14px',
-                                                    fontStyle: 'italic'
-                                                }}>Loading additional data...</span>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    <div className="papers-grid" style={{
-                                        display: 'flex', 
-                                        flexDirection: 'column', 
-                                        gap: '1rem',
-                                        padding: '0.5rem'
-                                    }}>
-                                        {papers.map((paper, index) => (
-                                            <div key={index} className="card paper-card" style={{ 
-                                                width: '100%',
-                                                padding: '0.75rem',
-                                                borderRadius: '10px',
-                                                boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-                                                backgroundColor: 'rgba(255, 255, 255, 0.9)',
-                                                backdropFilter: 'blur(10px)',
-                                                border: '1px solid rgba(255, 255, 255, 0.2)',
+                                                gap: '8px',
+                                                padding: '12px 20px',
+                                                backgroundColor: '#4CAF50',
+                                                color: 'white',
+                                                border: 'none',
+                                                borderRadius: '12px',
+                                                fontSize: '15px',
+                                                fontWeight: '600',
+                                                cursor: 'pointer',
                                                 transition: 'all 0.3s ease',
-                                                marginBottom: '0.5rem'
+                                                boxShadow: '0 2px 4px rgba(76, 175, 80, 0.2)'
                                             }}
                                             onMouseOver={(e) => {
-                                                e.currentTarget.style.transform = 'translateY(-2px)';
-                                                e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+                                                e.target.style.backgroundColor = '#3e8e41';
+                                                e.target.style.boxShadow = '0 4px 8px rgba(76, 175, 80, 0.3)';
+                                                e.target.style.transform = 'translateY(-2px)';
                                             }}
                                             onMouseOut={(e) => {
-                                                e.currentTarget.style.transform = 'translateY(0)';
-                                                e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.1)';
-                                            }}>
-                                                <h4 className="paper-title" style={{
-                                                    fontSize: '1.1rem',
-                                                    marginBottom: '0.5rem',
-                                                    color: '#2c3e50',
-                                                    fontWeight: '600',
-                                                    lineHeight: '1.4'
-                                                }}>{paper.title}</h4>
-                                                
-                                                <div className="paper-details" style={{
-                                                    display: 'flex',
-                                                    flexDirection: 'column',
-                                                    gap: '0.25rem',
-                                                    marginBottom: '0.5rem'
-                                                }}>
-                                                    <p className="paper-source" style={{ 
-                                                        margin: 0,
-                                                        display: 'flex',
-                                                        alignItems: 'center',
-                                                        gap: '6px',
-                                                        color: '#2c3e50',
-                                                        fontSize: '0.8rem'
-                                                    }}>
-                                                        <span style={{ 
-                                                            fontWeight: '600',
-                                                            color: '#4CAF50',
-                                                            fontSize: '0.7rem',
-                                                            padding: '1px 4px',
-                                                            backgroundColor: 'rgba(76, 175, 80, 0.1)',
-                                                            borderRadius: '3px'
-                                                        }}>Source</span>
-                                                        {paper.source || 'N/A'}
-                                                    </p>
-                                                    <p className="paper-year" style={{ 
-                                                        margin: 0,
-                                                        display: 'flex',
-                                                        alignItems: 'center',
-                                                        gap: '6px',
-                                                        color: '#2c3e50',
-                                                        fontSize: '0.8rem'
-                                                    }}>
-                                                        <span style={{ 
-                                                            fontWeight: '600',
-                                                            color: '#4CAF50',
-                                                            fontSize: '0.7rem',
-                                                            padding: '1px 4px',
-                                                            backgroundColor: 'rgba(76, 175, 80, 0.1)',
-                                                            borderRadius: '3px'
-                                                        }}>Year</span>
-                                                        {paper.year || 'N/A'}
-                                                    </p>
-                                                </div>
-
-                                                {paper.keywords && paper.keywords.length > 0 && (
-                                                    <div className="keywords-container" style={{
-                                                        display: 'flex',
-                                                        flexWrap: 'wrap',
-                                                        gap: '0.3rem',
-                                                        marginBottom: '0.75rem'
-                                                    }}>
-                                                        {paper.keywords.map((keyword, idx) => (
-                                                            <span key={idx} style={{
-                                                                backgroundColor: 'rgba(76, 175, 80, 0.1)',
-                                                                padding: '1px 6px',
-                                                                borderRadius: '10px',
-                                                                fontSize: '0.7rem',
-                                                                color: '#4CAF50',
-                                                                fontWeight: '500',
-                                                                transition: 'all 0.2s ease'
-                                                            }}
-                                                            onMouseOver={(e) => {
-                                                                e.target.style.backgroundColor = 'rgba(76, 175, 80, 0.2)';
-                                                                e.target.style.transform = 'translateY(-1px)';
-                                                            }}
-                                                            onMouseOut={(e) => {
-                                                                e.target.style.backgroundColor = 'rgba(76, 175, 80, 0.1)';
-                                                                e.target.style.transform = 'translateY(0)';
-                                                            }}>
-                                                                {keyword}
-                                                            </span>
-                                                        ))}
-                                                    </div>
-                                                )}
-
-                                                {paper.download_url && (
-                                                    <a
-                                                        href={paper.download_url}
-                                                        target="_blank"
-                                                        rel="noopener noreferrer"
-                                                        className="btn btn-primary paper-download"
-                                                        style={{
-                                                            display: 'inline-flex',
-                                                            alignItems: 'center',
-                                                            gap: '6px',
-                                                            padding: '6px 12px',
-                                                            backgroundColor: '#4CAF50',
-                                                            color: 'white',
-                                                            textDecoration: 'none',
-                                                            borderRadius: '6px',
-                                                            fontSize: '0.8rem',
-                                                            fontWeight: '500',
-                                                            transition: 'all 0.3s ease',
-                                                            boxShadow: '0 2px 4px rgba(76, 175, 80, 0.2)'
-                                                        }}
-                                                        onMouseOver={(e) => {
-                                                            e.target.style.backgroundColor = '#3e8e41';
-                                                            e.target.style.boxShadow = '0 4px 8px rgba(76, 175, 80, 0.3)';
-                                                            e.target.style.transform = 'translateY(-2px)';
-                                                        }}
-                                                        onMouseOut={(e) => {
-                                                            e.target.style.backgroundColor = '#4CAF50';
-                                                            e.target.style.boxShadow = '0 2px 4px rgba(76, 175, 80, 0.2)';
-                                                            e.target.style.transform = 'translateY(0)';
-                                                        }}
-                                                    >
-                                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                                            <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="currentColor"/>
-                                                        </svg>
-                                                        Download PDF
-                                                    </a>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                    
-                                    {/* Pagination Controls */}
-                                    {totalPages > 1 && (
-                                        <div className="pagination-controls" style={{
-                                            display: 'flex',
-                                            justifyContent: 'center',
-                                            alignItems: 'center',
-                                            marginTop: '2rem',
-                                            marginBottom: '1rem',
-                                            gap: '1rem'
-                                        }}>
-                                            <button
-                                                onClick={() => handlePageChange(currentPage - 1)}
-                                                disabled={currentPage === 1 || loading}
-                                                style={{
-                                                    padding: '8px 16px',
-                                                    backgroundColor: currentPage === 1 ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.2)',
-                                                    color: currentPage === 1 ? 'rgba(255, 255, 255, 0.5)' : 'white',
-                                                    border: '1px solid rgba(255, 255, 255, 0.2)',
+                                                e.target.style.backgroundColor = '#4CAF50';
+                                                e.target.style.boxShadow = '0 2px 4px rgba(76, 175, 80, 0.2)';
+                                                e.target.style.transform = 'translateY(0)';
+                                            }}
+                                        >
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="currentColor"/>
+                                            </svg>
+                                            Download
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ marginLeft: '4px' }}>
+                                                <path d="M7 10l5 5 5-5z" fill="currentColor"/>
+                                            </svg>
+                                        </button>
+                                        <Menu
+                                            anchorEl={anchorEl}
+                                            open={open}
+                                            onClose={handleClose}
+                                            anchorOrigin={{
+                                                vertical: 'bottom',
+                                                horizontal: 'right',
+                                            }}
+                                            transformOrigin={{
+                                                vertical: 'top',
+                                                horizontal: 'right',
+                                            }}
+                                            componentsProps={{
+                                                style: {
+                                                    backgroundColor: 'white',
                                                     borderRadius: '8px',
-                                                    cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+                                                    marginTop: '8px',
+                                                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                                                }
+                                            }}
+                                        >
+                                            <MenuItem 
+                                                onClick={handleDownloadCSV}
+                                                style={{
+                                                    padding: '10px 20px',
+                                                    fontSize: '14px',
                                                     display: 'flex',
                                                     alignItems: 'center',
                                                     gap: '8px',
-                                                    fontSize: '14px',
-                                                    fontWeight: '500',
-                                                    transition: 'all 0.3s ease'
+                                                    color: '#2c3e50',
+                                                    transition: 'all 0.2s ease',
                                                 }}
                                                 onMouseOver={(e) => {
-                                                    if (currentPage !== 1 && !loading) {
-                                                        e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.3)';
-                                                        e.target.style.transform = 'translateY(-2px)';
-                                                    }
+                                                    e.target.style.backgroundColor = 'rgba(76, 175, 80, 0.1)';
                                                 }}
                                                 onMouseOut={(e) => {
-                                                    if (currentPage !== 1 && !loading) {
-                                                        e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)';
-                                                        e.target.style.transform = 'translateY(0)';
-                                                    }
+                                                    e.target.style.backgroundColor = 'transparent';
                                                 }}
                                             >
                                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                                    <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z" fill="currentColor"/>
+                                                    <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="#4CAF50"/>
                                                 </svg>
-                                                Previous
-                                            </button>
+                                                Download CSV
+                                            </MenuItem>
+                                            <MenuItem 
+                                                onClick={handleDownloadPDFs}
+                                                style={{
+                                                    padding: '10px 20px',
+                                                    fontSize: '14px',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '8px',
+                                                    color: '#2c3e50',
+                                                    transition: 'all 0.2s ease',
+                                                }}
+                                                onMouseOver={(e) => {
+                                                    e.target.style.backgroundColor = 'rgba(76, 175, 80, 0.1)';
+                                                }}
+                                                onMouseOut={(e) => {
+                                                    e.target.style.backgroundColor = 'transparent';
+                                                }}
+                                            >
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                    <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="#4CAF50"/>
+                                                </svg>
+                                                Download PDFs
+                                            </MenuItem>
+                                        </Menu>
+                                        {csvLoading && (
+                                            <span className="loading-indicator" style={{
+                                                color: '#2c3e50',
+                                                fontSize: '14px',
+                                                fontStyle: 'italic'
+                                            }}>Loading additional data...</span>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="papers-grid" style={{
+                                    display: 'flex', 
+                                    flexDirection: 'column', 
+                                    gap: '1rem',
+                                    padding: '0.5rem'
+                                }}>
+                                    {papers.map((paper, index) => (
+                                        <div key={index} className="paper-card" style={{ 
+                                            width: '100%',
+                                            padding: '1.5rem',
+                                            borderRadius: '10px',
+                                            backgroundColor: 'rgba(10, 20, 50, 0.9)',
+                                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                                            transition: 'all 0.3s ease',
+                                            marginBottom: '0.5rem',
+                                            boxShadow: '0 4px 12px rgba(0,0,0,0.2)'
+                                        }}
+                                        onMouseOver={(e) => {
+                                            e.currentTarget.style.transform = 'translateY(-2px)';
+                                            e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,0.3)';
+                                        }}
+                                        onMouseOut={(e) => {
+                                            e.currentTarget.style.transform = 'translateY(0)';
+                                            e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.2)';
+                                        }}>
+                                            <h4 className="paper-title" style={{
+                                                fontSize: '1.1rem',
+                                                marginBottom: '1rem',
+                                                color: 'white',
+                                                fontWeight: '600',
+                                                lineHeight: '1.4'
+                                            }}>{paper.title}</h4>
                                             
                                             <div style={{
                                                 display: 'flex',
-                                                alignItems: 'center',
-                                                gap: '0.5rem',
-                                                color: 'white',
-                                                fontSize: '14px',
-                                                fontWeight: '500'
+                                                flexWrap: 'wrap',
+                                                gap: '0.8rem',
+                                                marginBottom: '1.2rem'
                                             }}>
-                                                <span>Page {currentPage} of {totalPages}</span>
-                                            </div>
-                                            
-                                            <button
-                                                onClick={() => handlePageChange(currentPage + 1)}
-                                                disabled={currentPage === totalPages || loading}
-                                                style={{
-                                                    padding: '8px 16px',
-                                                    backgroundColor: currentPage === totalPages ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.2)',
-                                                    color: currentPage === totalPages ? 'rgba(255, 255, 255, 0.5)' : 'white',
-                                                    border: '1px solid rgba(255, 255, 255, 0.2)',
-                                                    borderRadius: '8px',
-                                                    cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+                                                <div style={{ 
                                                     display: 'flex',
                                                     alignItems: 'center',
-                                                    gap: '8px',
-                                                    fontSize: '14px',
-                                                    fontWeight: '500',
-                                                    transition: 'all 0.3s ease'
-                                                }}
-                                                onMouseOver={(e) => {
-                                                    if (currentPage !== totalPages && !loading) {
-                                                        e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.3)';
+                                                    gap: '0.5rem'
+                                                }}>
+                                                    <span style={{ 
+                                                        color: '#4CAF50',
+                                                        fontWeight: '600',
+                                                        fontSize: '0.85rem'
+                                                    }}>Source</span>
+                                                    <span style={{ 
+                                                        color: 'white',
+                                                        fontSize: '0.85rem'
+                                                    }}>{paper.source || 'N/A'}</span>
+                                                </div>
+                                                
+                                                <div style={{ 
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '0.5rem'
+                                                }}>
+                                                    <span style={{ 
+                                                        color: '#4CAF50',
+                                                        fontWeight: '600',
+                                                        fontSize: '0.85rem'
+                                                    }}>Year</span>
+                                                    <span style={{ 
+                                                        color: 'white',
+                                                        fontSize: '0.85rem'
+                                                    }}>{paper.year || 'N/A'}</span>
+                                                </div>
+                                            </div>
+
+                                            {paper.keywords && paper.keywords.length > 0 && (
+                                                <div className="keywords-container" style={{
+                                                    display: 'flex',
+                                                    flexWrap: 'wrap',
+                                                    gap: '0.4rem',
+                                                    marginBottom: '1rem'
+                                                }}>
+                                                    {paper.keywords.map((keyword, idx) => (
+                                                        <span key={idx} style={{
+                                                            backgroundColor: 'rgba(76, 175, 80, 0.15)',
+                                                            padding: '3px 8px',
+                                                            borderRadius: '12px',
+                                                            fontSize: '0.75rem',
+                                                            color: '#4CAF50',
+                                                            fontWeight: '500',
+                                                            transition: 'all 0.2s ease'
+                                                        }}
+                                                        onMouseOver={(e) => {
+                                                            e.target.style.backgroundColor = 'rgba(76, 175, 80, 0.25)';
+                                                            e.target.style.transform = 'translateY(-1px)';
+                                                        }}
+                                                        onMouseOut={(e) => {
+                                                            e.target.style.backgroundColor = 'rgba(76, 175, 80, 0.15)';
+                                                            e.target.style.transform = 'translateY(0)';
+                                                        }}>
+                                                            {keyword}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {paper.download_url && (
+                                                <a
+                                                    href={paper.download_url}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    style={{
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        width: '140px',
+                                                        padding: '0.4rem 0.5rem',
+                                                        backgroundColor: '#4CAF50',
+                                                        color: 'white',
+                                                        textDecoration: 'none',
+                                                        borderRadius: '6px',
+                                                        fontSize: '0.75rem',
+                                                        fontWeight: '500',
+                                                        transition: 'all 0.3s ease',
+                                                        boxShadow: '0 2px 8px rgba(76, 175, 80, 0.3)',
+                                                        whiteSpace: 'nowrap'
+                                                    }}
+                                                    onMouseOver={(e) => {
+                                                        e.target.style.backgroundColor = '#3e8e41';
+                                                        e.target.style.boxShadow = '0 4px 12px rgba(76, 175, 80, 0.4)';
                                                         e.target.style.transform = 'translateY(-2px)';
-                                                    }
-                                                }}
-                                                onMouseOut={(e) => {
-                                                    if (currentPage !== totalPages && !loading) {
-                                                        e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)';
+                                                    }}
+                                                    onMouseOut={(e) => {
+                                                        e.target.style.backgroundColor = '#4CAF50';
+                                                        e.target.style.boxShadow = '0 2px 8px rgba(76, 175, 80, 0.3)';
                                                         e.target.style.transform = 'translateY(0)';
-                                                    }
-                                                }}
-                                            >
-                                                Next
-                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                                    <path d="M8.59 16.59L10 18l6-6-6-6-1.41 1.41L13.17 12z" fill="currentColor"/>
-                                                </svg>
-                                            </button>
+                                                    }}
+                                                >
+                                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{marginRight: '4px'}}>
+                                                        <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" fill="currentColor"/>
+                                                    </svg>
+                                                    Download PDF
+                                                </a>
+                                            )}
                                         </div>
-                                    )}
+                                    ))}
                                 </div>
-                            </>
+
+                                {/* Pagination controls */}
+                                {totalPages > 1 && (
+                                    <div className="pagination-controls" style={{
+                                        display: 'flex',
+                                        justifyContent: 'center',
+                                        alignItems: 'center',
+                                        marginTop: '2rem',
+                                        marginBottom: '1rem',
+                                        gap: '1rem'
+                                    }}>
+                                        <button
+                                            onClick={() => handlePageChange(currentPage - 1)}
+                                            disabled={currentPage === 1 || loading}
+                                            style={{
+                                                padding: '8px 16px',
+                                                backgroundColor: currentPage === 1 ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.2)',
+                                                color: currentPage === 1 ? 'rgba(255, 255, 255, 0.5)' : 'white',
+                                                border: '1px solid rgba(255, 255, 255, 0.2)',
+                                                borderRadius: '8px',
+                                                cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '8px',
+                                                fontSize: '14px',
+                                                fontWeight: '500',
+                                                transition: 'all 0.3s ease'
+                                            }}
+                                            onMouseOver={(e) => {
+                                                if (currentPage !== 1 && !loading) {
+                                                    e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.3)';
+                                                    e.target.style.transform = 'translateY(-2px)';
+                                                }
+                                            }}
+                                            onMouseOut={(e) => {
+                                                if (currentPage !== 1 && !loading) {
+                                                    e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)';
+                                                    e.target.style.transform = 'translateY(0)';
+                                                }
+                                            }}
+                                        >
+                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L13.17 12z" fill="currentColor"/>
+                                            </svg>
+                                            Previous
+                                        </button>
+                                        
+                                        <div style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '0.5rem',
+                                            color: 'white',
+                                            fontSize: '14px',
+                                            fontWeight: '500'
+                                        }}>
+                                            <span>Page {currentPage} of {totalPages}</span>
+                                        </div>
+                                        
+                                        <button
+                                            onClick={() => handlePageChange(currentPage + 1)}
+                                            disabled={currentPage === totalPages || loading}
+                                            style={{
+                                                padding: '8px 16px',
+                                                backgroundColor: currentPage === totalPages ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 255, 255, 0.2)',
+                                                color: currentPage === totalPages ? 'rgba(255, 255, 255, 0.5)' : 'white',
+                                                border: '1px solid rgba(255, 255, 255, 0.2)',
+                                                borderRadius: '8px',
+                                                cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '8px',
+                                                fontSize: '14px',
+                                                fontWeight: '500',
+                                                transition: 'all 0.3s ease'
+                                            }}
+                                            onMouseOver={(e) => {
+                                                if (currentPage !== totalPages && !loading) {
+                                                    e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.3)';
+                                                    e.target.style.transform = 'translateY(-2px)';
+                                                }
+                                            }}
+                                            onMouseOut={(e) => {
+                                                if (currentPage !== totalPages && !loading) {
+                                                    e.target.style.backgroundColor = 'rgba(255, 255, 255, 0.2)';
+                                                    e.target.style.transform = 'translateY(0)';
+                                                }
+                                            }}
+                                        >
+                                            Next
+                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                <path d="M8.59 16.59L10 18l6-6-6-6-1.41 1.41L13.17 12z" fill="currentColor"/>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
                         )}
 
                         {/* Rover Chat Icon - Moved outside results section */}
@@ -1074,7 +1473,7 @@ const SearchPage = () => {
                                     setTotalPages(1);
                                     
                                     // Call the embedding endpoint
-                                    await axios.get(`http://localhost:5000/create_embedding/${csvFilename}`);
+                                    await axios.get(`${backend_addrs}/create_embedding/${csvFilename}`);
                                 } catch (error) {
                                     console.error('Error creating embeddings:', error);
                                     setEmbeddingLoading(false);

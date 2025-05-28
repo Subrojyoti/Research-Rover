@@ -30,3 +30,31 @@ def get_secrets(core_api_key = None, my_email = None):
         raise
     except Exception as e:
         raise Exception(f"Error reading secrets: {e}")
+
+def get_pubmed_api_key():
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        api_key_path = os.path.join(current_dir, "..", "..", "secrets.txt")
+        
+        if not os.path.exists(api_key_path):
+            raise FileNotFoundError(f"API key file not found at: {api_key_path}")
+        
+        secrets = {}
+        with open(api_key_path, "r") as apikey_file:
+            for line in apikey_file:
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    secrets[key.strip()] = value.strip().strip("'")
+
+        pubmed_api_key = secrets.get('PUBMED_API_KEY')
+        if not pubmed_api_key:
+            raise ValueError("PubMed API key is missing")
+        
+        return pubmed_api_key
+
+    except FileNotFoundError as e:
+        print(f"Error: {str(e)}")
+        print("Please create a secrets.txt file in the backend directory with your PubMed API key.")
+        raise
+    except Exception as e:
+        raise Exception(f"Error reading PubMed API key: {e}")

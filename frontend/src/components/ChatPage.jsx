@@ -3,7 +3,7 @@ import axios from 'axios';
 import { useLocation } from 'react-router-dom';
 import { Box, styled, keyframes } from '@mui/material';
 
-
+const backend_addrs = import.meta.env.VITE_API_URL;
 const BackgroundWrapper = styled(Box)({
     position: 'fixed',
     top: 0,
@@ -22,6 +22,16 @@ const BackgroundWrapper = styled(Box)({
         from: { opacity: 0 },
         to: { opacity: 1 },
     },
+});
+
+const BackgroundOverlay = styled(Box)({
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '100%',
+    background: 'rgba(18, 32, 50, 0.65)', // dark overlay
+    zIndex: -1,
 });
 
 const ContentWrapper = styled(Box)({
@@ -299,7 +309,7 @@ const ChatPage = () => {
             setLoading(true);
     
             try {
-                const response = await axios.post(`http://localhost:5000/chat_conversation/${filename}`, {
+                const response = await axios.post(`${backend_addrs}/chat_conversation/${filename}`, {
                     query: userMessage
                 });
     
@@ -344,7 +354,7 @@ const ChatPage = () => {
             setLoading(true);
     
             try {
-                const response = await axios.post(`http://localhost:5000/chat_conversation/${filename}`, {
+                const response = await axios.post(`${backend_addrs}/chat_conversation/${filename}`, {
                     query: userMessage
                 });
     
@@ -372,59 +382,72 @@ const ChatPage = () => {
     return (
         <>
             <BackgroundWrapper />
+            <BackgroundOverlay />
             <ContentWrapper>
                 <div className="chat-container" style={{
-                    maxWidth: '1000px',
-                    width: '80%',
+                    maxWidth: '1400px',
+                    width: '97%',
                     margin: '0 auto',
-                    height: '81vh',
+                    height: '85vh',
                     display: 'flex',
                     flexDirection: 'column',
-                    backgroundColor: 'rgba(18, 18, 18, 0.8)',
+                    backgroundColor: 'rgba(30, 58, 95, 0.90)', // theme primary
                     backdropFilter: 'blur(10px)',
-                    borderRadius: '16px',
-                    border: '1px solid rgba(76, 175, 80, 0.1)',
-                    boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-                    padding: '1.5rem',
+                    borderRadius: '12px',
+                    border: '1.5px solid rgba(76, 175, 80, 0.15)',
+                    boxShadow: '0 12px 48px rgba(0,0,0,0.35)',
+                    padding: '0.5rem',
                     position: 'fixed',
                     top: '50%',
                     left: '50%',
                     transform: 'translate(-50%, -50%)',
                     zIndex: 10,
-                    overflow: 'hidden'
+                    overflow: 'hidden',
                 }}>
                     <div style={{
                         position: 'absolute',
-                        top: '1.5rem',
-                        left: '1.5rem',
-                        right: '1.5rem',
-                        bottom: '1.5rem',
-                        backgroundColor: 'rgba(22, 22, 22, 0.98)',
-                        borderRadius: '12px',
+                        top: '1rem',
+                        left: '1rem',
+                        right: '1rem',
+                        bottom: '1rem',
+                        backgroundColor: 'rgba(22, 34, 54, 0.98)', // theme dark
+                        borderRadius: '10px',
                         display: 'flex',
                         flexDirection: 'column',
-                        overflow: 'hidden'
+                        overflow: 'hidden',
+                        boxShadow: '0 4px 24px rgba(0,0,0,0.18)',
                     }}>
                         {/* Header */}
                         <div style={{
-                            padding: '1.2rem 1.5rem',
+                            padding: '1rem 1.2rem',
                             borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
                             backgroundColor: 'rgba(15, 15, 15, 0.95)',
                         }}>
                             <h1 style={{
                                 color: 'white',
-                                fontSize: '1.8rem', // Increased font size
+                                fontSize: '2rem',
                                 margin: 0,
-                                fontFamily: '"Inter", sans-serif',
-                                fontWeight: 600,
+                                fontFamily: '"Space Grotesk", "Inter", sans-serif',
+                                fontWeight: 700,
+                                letterSpacing: '0.5px',
                             }}>Research Rover</h1>
+                            <div style={{
+                                color: '#B8C6D9',
+                                fontSize: '1.1rem',
+                                fontFamily: '"Inter", sans-serif',
+                                marginTop: '0.2rem',
+                                fontWeight: 400,
+                                letterSpacing: '0.01em',
+                            }}>
+                                Your AI-powered research assistant
+                            </div>
                         </div>
 
                         {/* Messages Container */}
                         <div className="messages-container" style={{
                             flex: 1,
                             overflowY: 'auto',
-                            padding: '1.5rem',
+                            padding: '1.5rem 2.5rem',
                             display: 'flex',
                             flexDirection: 'column',
                             gap: '1.5rem',
@@ -468,7 +491,8 @@ const ChatPage = () => {
                                         alignItems: 'flex-start',
                                         gap: '1rem',
                                         alignSelf: message.isUser ? 'flex-end' : 'flex-start',
-                                        maxWidth: '75%',
+                                        maxWidth: '90%',
+                                        animation: 'fadeInUp 0.5s',
                                     }}
                                 >
                                     {!message.isUser && (
@@ -548,7 +572,7 @@ const ChatPage = () => {
                                     {!message.isloading && (
                                         <div style={{
                                             backgroundColor: message.isUser 
-                                                ? 'rgba(18, 18, 18, 0.95)'
+                                                ? 'rgba(255,255,255,0.10)' // lighter for user
                                                 : 'rgba(255, 255, 255, 0.08)',
                                             padding: '1.2rem 1.4rem',
                                             borderRadius: '16px',
@@ -557,8 +581,15 @@ const ChatPage = () => {
                                             lineHeight: '1.6',
                                             fontFamily: '"Inter", sans-serif',
                                             border: message.isUser 
-                                                ? '1px solid rgba(76, 175, 80, 0.5)'
+                                                ? '1.5px solid #4CAF50'
                                                 : '1px solid rgba(255, 255, 255, 0.1)',
+                                            boxShadow: '0 2px 12px rgba(30,58,95,0.10)',
+                                            transition: 'box-shadow 0.2s, transform 0.2s',
+                                            cursor: 'pointer',
+                                            ':hover': {
+                                                boxShadow: '0 4px 24px rgba(30,58,95,0.18)',
+                                                transform: 'scale(1.02)',
+                                            },
                                         }}>
                                             {message.isUser ? (
                                                 message.text
@@ -652,7 +683,8 @@ const ChatPage = () => {
                                 backgroundColor: 'rgba(28, 28, 28, 0.95)',
                                 borderRadius: '12px',
                                 padding: '0.4rem',
-                                border: '1px solid rgba(255, 255, 255, 0.1)',
+                                border: '1.5px solid #1E3A5F', // theme border
+                                boxShadow: '0 2px 8px rgba(30,58,95,0.10)',
                             }}>
                                 <textarea
                                     type="text"
@@ -698,7 +730,9 @@ const ChatPage = () => {
                                     style={{
                                         width: '46px',
                                         height: '46px',
-                                        backgroundColor: loading ? 'rgba(76, 175, 80, 0.3)' : '#4CAF50',
+                                        background: loading 
+                                            ? 'linear-gradient(90deg, #4CAF50 60%, #1E3A5F 100%)'
+                                            : 'linear-gradient(90deg, #1E3A5F 0%, #4CAF50 100%)',
                                         border: 'none',
                                         borderRadius: '10px',
                                         cursor: loading ? 'not-allowed' : 'pointer',
@@ -706,11 +740,8 @@ const ChatPage = () => {
                                         alignItems: 'center',
                                         justifyContent: 'center',
                                         transition: 'all 0.2s ease',
+                                        boxShadow: '0 2px 8px rgba(30,58,95,0.15)',
                                         transform: loading ? 'none' : 'scale(1)',
-                                        '&:hover': {
-                                            backgroundColor: '#3d8c40',
-                                            transform: 'scale(0.98)',
-                                        }
                                     }}
                                 >
                                     <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
@@ -727,3 +758,19 @@ const ChatPage = () => {
 };
 
 export default ChatPage;
+
+// Add fadeInUp animation
+<style>
+{`
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+`}
+</style>

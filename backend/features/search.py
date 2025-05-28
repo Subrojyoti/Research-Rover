@@ -50,8 +50,8 @@ MAX_WORKERS = int(os.environ.get("MAX_WORKERS", 10)) # Allow overriding via env 
 # --- Session with Retries ---
 # OPTIMIZATION: Use a Session object for connection pooling and add retries
 def create_session_with_retries(
-    retries=3,
-    backoff_factor=0.5, # Time delay factor: {backoff factor} * (2 ** ({number of total retries} - 1))
+    retries=5,  # Increased from 3 to 5
+    backoff_factor=1.0,  # Increased from 0.5 to 1.0 for longer delays
     status_forcelist=(500, 502, 503, 504, 429), # Retry on these server errors and rate limits
     session=None,
 ):
@@ -80,7 +80,7 @@ core_session.headers.update(CORE_HEADERS)
 
 
 # --- CORE API Search (Modified to use Session) ---
-def search_works(query, limit=100, max_results=10, start_year=0, end_year=0):
+def search_works(query, limit=200, max_results=10, start_year=0, end_year=0):
     """Search for works using the CORE API with scrolling, session, and error handling."""
    
     results = []
@@ -173,10 +173,12 @@ def clean_text(text):
 # --- Function to Process a Single Work Item (for Parallel Execution) ---
 def process_work_item(work_item, item_index, total_items):
     """Processes a single work item to extract all required information. Runs in a thread."""
-    core_id = work_item.get('id', 'N/A')
-    thread_name = threading.current_thread().name # Get thread name for logging
-    logging.info(f"[Item {item_index+1}/{total_items}] Processing CORE ID: {core_id}")
+    # Get the item ID safely - ensure we log its type for debugging
+    item_id = work_item.get('id', 'N/A')
+    logging.info(f"[Item {item_index+1}/{total_items}] Processing item ID: {item_id} (Type: {type(item_id).__name__})")
 
+    thread_name = threading.current_thread().name # Get thread name for logging
+    
     # Create a *new* session for this thread/task to avoid sharing issues (thread-local state)
     # This session will be used for all non-CORE API calls within this function.
     try:
@@ -209,37 +211,66 @@ def process_work_item(work_item, item_index, total_items):
         "Year_Published": work_item.get("yearPublished", "") or "N/A" # Handle potential None year
     }
 
-    # --- Extract Provider Info (Prioritize 'name' field if available) ---
-    provider_name = "Unknown"
-    # Extract provider info
-    data_providers = work_item.get('dataProviders', [])
-    if data_providers and len(data_providers) > 0 and 'url' in data_providers[0]:
-        provider = data_providers[0].get('url')
-        print(f"Provider URL: {provider}")
+    # --- Detect source (PubMed or CORE) ---
+    # Safely determine if this is a PubMed result based on ID format
+    # Handle any type of ID (string, int, None, etc.) without raising exceptions
+    is_pubmed = False
+    if item_id is not None:
         try:
-            provider_info = requests.get(provider, headers=CORE_HEADERS)
-            if provider_info.status_code == 200:
-                provider_info = provider_info.json()
-                provider_name = provider_info.get('name', "Unknown")
-        except:
-            pass
-        # Add fallback logic here if 'name' is often missing and 'url' fetch is needed
-        # else: logging.debug(f"[Item {item_index+1}] Provider name missing in first provider object.")
+            # Convert to string safely and then check
+            id_str = str(item_id)
+            is_pubmed = id_str.startswith('pubmed_')
+            logging.debug(f"[Item {item_index+1}] ID '{id_str}' identified as {'PubMed' if is_pubmed else 'CORE'} source")
+        except Exception as e:
+            # If any error occurs during type conversion, log it and assume not PubMed
+            logging.error(f"[Item {item_index+1}] Error determining source from ID: {e}")
+            is_pubmed = False
 
-    entry["Source"] = clean_text(provider_name)
+    # --- Extract Provider Info ---
+    if is_pubmed:
+        # For PubMed results, provider info is already in the dataProviders field
+        data_providers = work_item.get('dataProviders', [])
+        if data_providers and isinstance(data_providers, list) and len(data_providers) > 0:
+            provider_name = data_providers[0].get('name', 'PubMed')
+            entry["Source"] = clean_text(provider_name)
+        else:
+            entry["Source"] = "PubMed"
+    else:
+        # For CORE results, follow the existing provider extraction logic
+        provider_name = "Unknown"
+        data_providers = work_item.get('dataProviders', [])
+        if data_providers and len(data_providers) > 0 and 'url' in data_providers[0]:
+            provider = data_providers[0].get('url')
+            print(f"Provider URL: {provider}")
+            try:
+                provider_info = requests.get(provider, headers=CORE_HEADERS)
+                if provider_info.status_code == 200:
+                    provider_info = provider_info.json()
+                    provider_name = provider_info.get('name', "Unknown")
+            except:
+                pass
+        entry["Source"] = clean_text(provider_name)
 
-    # --- Handle DOI, Reference, and Keywords (using the thread's session) ---
-    doi = clean_text(work_item.get("doi", "")) # Clean DOI from CORE first
+    # --- Handle DOI, Reference, and Keywords ---
+    doi = clean_text(work_item.get("doi", "")) # Clean DOI first
     reference = ""
     keywords = []
-    bibtex_keywords = None
-
-    # 1. Try finding DOI if not present/valid in CORE data
-    # Basic DOI validation regex (simple version)
+    
+    # For PubMed, use pre-extracted reference if available
+    if is_pubmed:
+        # Use pre-extracted MeSH terms as keywords
+        mesh_terms = work_item.get('meshTerms', [])
+        if mesh_terms:
+            keywords = [clean_text(term) for term in mesh_terms if term]
+            logging.debug(f"[Item {item_index+1}] Using MeSH terms as keywords: {keywords}")
+    
+    # 1. Try finding DOI if not present/valid
     doi_pattern = r"^10\.\d{4,9}/[-._;()/:A-Z0-9]+$"
     if not doi or not re.match(doi_pattern, doi, re.IGNORECASE):
-        if doi: logging.debug(f"[Item {item_index+1}] Invalid DOI format from CORE ('{doi}'). Searching external APIs...")
-        else: logging.debug(f"[Item {item_index+1}] DOI missing for '{title[:50]}...'. Searching external APIs...")
+        if doi: 
+            logging.debug(f"[Item {item_index+1}] Invalid DOI format ('{doi}'). Searching external APIs...")
+        else: 
+            logging.debug(f"[Item {item_index+1}] DOI missing for '{title[:50]}...'. Searching external APIs...")
 
         # Pass the thread's session to the helper
         found_doi = get_doi(title, email=EMAIL, session=thread_session)
@@ -255,23 +286,29 @@ def process_work_item(work_item, item_index, total_items):
             logging.info(f"[Item {item_index+1}] Could not find DOI externally for '{title[:50]}...'")
             doi = "" # Ensure DOI is empty if not found/invalid
 
-    # 2. If a valid DOI exists, fetch BibTeX and Keywords
+    # 2. If a valid DOI exists, fetch BibTeX and Keywords (if not from PubMed or no keywords yet)
     if doi:
         entry["Doi"] = doi # Store the validated/found DOI
-        bibtex_data = fetch_bibtex(doi, session=thread_session) # Pass session
-        if bibtex_data and not bibtex_data.startswith("Error"):
-            # Use helper to parse BibTeX for reference and potentially keywords
-            parsed_reference, bibtex_keywords = bibtex_to_formatted_text(bibtex_data)
-            entry["Reference"] = clean_text(parsed_reference) # Clean parsed reference
-            if bibtex_keywords and isinstance(bibtex_keywords, list):
-                 # Clean and store keywords from BibTeX
-                keywords = [clean_text(kw) for kw in bibtex_keywords if isinstance(kw, str) and clean_text(kw)]
-                logging.debug(f"[Item {item_index+1}] Found keywords in BibTeX: {keywords}")
+        
+        # Only fetch BibTeX if no keywords (for PubMed) or for CORE
+        if not keywords or not is_pubmed:
+            bibtex_data = fetch_bibtex(doi, session=thread_session) # Pass session
+            if bibtex_data and not bibtex_data.startswith("Error"):
+                # Use helper to parse BibTeX for reference and potentially keywords
+                parsed_reference, bibtex_keywords = bibtex_to_formatted_text(bibtex_data)
+                # Use the parsed reference if we don't have one yet
+                if not entry["Reference"]:
+                    entry["Reference"] = clean_text(parsed_reference)
+                
+                # For CORE or if we still don't have keywords, use BibTeX keywords
+                if (not is_pubmed or not keywords) and bibtex_keywords and isinstance(bibtex_keywords, list):
+                    # Clean and store keywords from BibTeX
+                    keywords = [clean_text(kw) for kw in bibtex_keywords if isinstance(kw, str) and clean_text(kw)]
+                    logging.debug(f"[Item {item_index+1}] Found keywords in BibTeX: {keywords}")
 
-        # 3. If BibTeX didn't provide keywords, try keyword scraper APIs
-        # Check keywords list is still empty
+        # 3. If we still don't have keywords and it's not PubMed or we have no keywords, try keyword scraper APIs
         if not keywords:
-            logging.debug(f"[Item {item_index+1}] BibTeX keywords empty for DOI {doi}. Querying keyword APIs...")
+            logging.debug(f"[Item {item_index+1}] No keywords found yet for DOI {doi}. Querying keyword APIs...")
             # Pass session to keyword scraper
             external_keywords = get_keywords_for_doi(doi, email=EMAIL, session=thread_session)
             if external_keywords and isinstance(external_keywords, list):
@@ -279,15 +316,32 @@ def process_work_item(work_item, item_index, total_items):
                 keywords = [clean_text(kw) for kw in external_keywords if isinstance(kw, str) and clean_text(kw)]
                 logging.info(f"[Item {item_index+1}] Found keywords externally via APIs: {keywords}")
 
-        # Ensure Keywords field contains the final list (could be empty)
-        entry["Keywords"] = keywords if keywords else []
+    # Store Keywords field with the final list (could be empty)
+    entry["Keywords"] = keywords if keywords else []
+    
+    # For PubMed, use the pre-extracted reference if we don't have one yet
+    if is_pubmed and not entry["Reference"] and 'authors' in work_item:
+        # Create a basic reference format if not already set
+        reference = clean_text(work_item.get('authors', ''))
+        year = work_item.get('yearPublished', '')
+        if year:
+            reference += f" ({year})"
+        if title:
+            reference += f". {title}"
+        journal = work_item.get('journal', '')
+        if journal:
+            reference += f". {journal}"
+        if doi:
+            reference += f". doi: {doi}"
+        
+        entry["Reference"] = clean_text(reference)
 
-    # --- Handle Full Text (Placeholder - requires significant extra work) ---
-    # CORE's fullText field is often metadata or requires specific access.
-    # Actual parsing needs PDF download (using Download_URL) and parsing libs.
-    entry["Full_Text"] = clean_text(work_item.get("fullText", "")) # Basic inclusion
-
-    logging.info(f"[Item {item_index+1}/{total_items}] Finished processing CORE ID: {core_id}")
+    # --- Handle Full Text ---
+    full_text = clean_text(work_item.get("fullText", ""))
+    if full_text:
+        entry["Full_Text"] = full_text
+    
+    logging.info(f"[Item {item_index+1}/{total_items}] Finished processing item ID: {item_id}")
     return entry # Return the dictionary for this item
 
 
@@ -333,27 +387,57 @@ def extract_and_save_to_csv(data, csv_file_name):
     # Check if any data was successfully processed before writing CSV
     if not processed_results:
         logging.warning(f"No data extracted successfully. CSV file '{csv_file_name}' will not be created/updated.")
+        # Create an empty CSV with just headers to avoid 404 errors
+        try:
+            with open(csv_file_name, "w", encoding="utf-8", newline='') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=headers)
+                writer.writeheader()
+            logging.info(f"Created empty CSV file with headers at: {os.path.abspath(csv_file_name)}")
+        except Exception as e:
+            logging.error(f"Failed to create empty CSV file: {e}")
         return []
 
     # OPTIMIZATION: Write to CSV after all data is processed
     try:
         logging.info(f"Saving {len(processed_results)} extracted items to {csv_file_name}...")
+        
+        # Make sure the directory exists
+        os.makedirs(os.path.dirname(os.path.abspath(csv_file_name)), exist_ok=True)
+        
         with open(csv_file_name, "w", encoding="utf-8", newline='') as csvfile:
             # Use DictWriter for easy writing from list of dictionaries
             writer = csv.DictWriter(csvfile, fieldnames=headers, extrasaction='ignore') # Ignore extra fields if any
             writer.writeheader()
+            
             # Write all processed rows at once
             writer.writerows(processed_results)
-        logging.info(f"CSV saved successfully at: {os.path.abspath(csv_file_name)}")
+            
+            # Flush to ensure data is written to disk
+            csvfile.flush()
+            os.fsync(csvfile.fileno())
+            
+        # Double-check file exists and has content
+        if not os.path.exists(csv_file_name):
+            logging.error(f"CSV file does not exist after writing: {csv_file_name}")
+            return processed_results
+        
+        file_size = os.path.getsize(csv_file_name)
+        logging.info(f"CSV saved successfully at: {os.path.abspath(csv_file_name)} (Size: {file_size} bytes)")
         return processed_results # Return the data that was saved
     except IOError as e:
         logging.error(f"I/O Error saving CSV file '{csv_file_name}': {e}")
+        import traceback
+        logging.error(traceback.format_exc())
     except csv.Error as e:
          logging.error(f"CSV writing error for file '{csv_file_name}': {e}")
+         import traceback
+         logging.error(traceback.format_exc())
     except Exception as e:
         logging.error(f"An unexpected error occurred during CSV writing: {e}", exc_info=True)
+        import traceback
+        logging.error(traceback.format_exc())
 
-    return [] # Return empty list if saving failed
+    return processed_results # Return the processed results even if saving failed
 
 
 

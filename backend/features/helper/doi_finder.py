@@ -26,6 +26,11 @@ def _get_request(url, params=None, headers=None, timeout=15, session=None):
     except requests.exceptions.RequestException as e:
         logging.error(f"Request Exception for {url}: {e}")
     return None
+def _titles_match(input_title, result_title):
+    """Simple normalization and comparison for title matching."""
+    def normalize(t):
+        return ' '.join(t.lower().split())
+    return normalize(input_title) == normalize(result_title)
 
 # --- API Helper Functions (Modified for Session) ---
 
@@ -44,10 +49,12 @@ def _get_doi_crossref(title, email, session=None):
                 data = response.json()
                 if data.get('status') == 'ok' and data['message'].get('items'):
                     item = data['message']['items'][0]
+                    result_title = item.get('title', [''])[0] if item.get('title') else ''
                     if 'DOI' in item and item['DOI']:
-                        doi = item['DOI']
-                        logging.debug(f"Crossref Found DOI: {doi}")
-                        return doi
+                        if _titles_match(title, result_title):
+                            doi = item['DOI']
+                            logging.debug(f"Crossref Found DOI: {doi}")
+                            return doi
                     else:
                          logging.debug("Crossref: DOI field empty or missing in first item.")
                 else:
@@ -81,11 +88,13 @@ def _get_doi_openalex(title, email, session=None):
                 data = response.json()
                 if data.get('results') and len(data['results']) > 0:
                     item = data['results'][0]
+                    result_title = item.get('title', '')
                     doi_url = item.get('doi')
                     if doi_url and 'doi.org/' in doi_url:
-                        doi = doi_url.split('doi.org/', 1)[1]
-                        logging.debug(f"OpenAlex Found DOI: {doi}")
-                        return doi
+                        if _titles_match(title, result_title):
+                            doi = doi_url.split('doi.org/', 1)[1]
+                            logging.debug(f"OpenAlex Found DOI: {doi}")
+                            return doi
                     else:
                         logging.debug("OpenAlex: DOI field missing or not in expected format.")
                 else:
@@ -122,10 +131,12 @@ def _get_doi_semantic_scholar(title, session=None):
                  data = response.json()
                  if data.get('data') and len(data['data']) > 0:
                      paper_data = data['data'][0]
+                     result_title = paper_data.get('title', '')
                      doi = paper_data.get('doi')
                      if doi:
-                         logging.debug(f"Semantic Scholar Found DOI: {doi}")
-                         return doi
+                        if _titles_match(title, result_title):
+                            logging.debug(f"Semantic Scholar Found DOI: {doi}")
+                            return doi
                      else:
                          logging.debug("Semantic Scholar: DOI field missing in first result.")
                  else:
@@ -178,6 +189,11 @@ def _get_doi_arxiv(title, session=None):
 
                 entry = root.find('atom:entry', namespaces)
                 if entry is not None:
+                    entry_title_elem = entry.find('atom:title', namespaces)
+                    entry_title = entry_title_elem.text if entry_title_elem is not None else ''
+                    if not _titles_match(title, entry_title):
+                        logging.debug(f"arXiv: Title mismatch. Expected '{title}', got '{entry_title}'")
+                        return None
                     arxiv_id_url_elem = entry.find('atom:id', namespaces)
                     if arxiv_id_url_elem is not None:
                         arxiv_id_url = arxiv_id_url_elem.text

@@ -80,13 +80,12 @@ core_session.headers.update(CORE_HEADERS)
 
 
 # --- CORE API Search (Modified to use Session) ---
-def search_works(query, limit=200, max_results=10, start_year=0, end_year=0):
-    """Search for works using the CORE API with scrolling, session, and error handling."""
-   
-    results = []
-    processed_ids = set() # Keep track of processed CORE IDs to avoid duplicates from scroll
-    # URL encode the query parameter
-    
+def search_works(query, limit=500, max_results=10, start_year=0, end_year=0):
+    """Search for works using the CORE API with scrolling, session, and error handling.
+    Ensures enough English-language papers are returned by continuing to scroll if needed.
+    """
+    english_results = []
+    processed_ids = set()
     encoded_query = urllib.parse.quote_plus(query)
     if start_year > 0 or end_year > 0:
         encoded_query = encoded_query + f" AND yearPublished>={start_year} AND yearPublished<={end_year}"
@@ -98,51 +97,35 @@ def search_works(query, limit=200, max_results=10, start_year=0, end_year=0):
     logging.info(f">>> Searching CORE for: '{query}' (Max results: {max_results}, Year range: {start_year}-{end_year})")
 
     try:
-        response = core_session.get(initial_url) # Use the session
-        response.raise_for_status() # Check for HTTP errors (session retry handles transient ones)
-        data = response.json()
-        logging.info(f"Initial CORE search successful for query: {query}")
+        url = initial_url
+        scroll_id = None
+        while len(english_results) < max_results:
+            response = core_session.get(url)
+            response.raise_for_status()
+            data = response.json()
+            batch_results = data.get("results", [])
+            # Filter for English language and not already processed
+            new_english = [
+                r for r in batch_results
+                if r.get('id') not in processed_ids and
+                   isinstance(r.get('language'), dict) and
+                   r['language'].get('code') == 'en'
+            ]
+            english_results.extend(new_english)
+            processed_ids.update(r.get('id') for r in batch_results if r.get('id'))
+            logging.info(f"Fetched {len(new_english)} new English results (total: {len(english_results)})")
 
-        # Process initial batch
-        batch_results = data.get("results", [])
-        new_results = [r for r in batch_results if r.get('id') not in processed_ids]
-            
-        results.extend(new_results)
-        processed_ids.update(r.get('id') for r in new_results if r.get('id'))
-        logging.info(f"Fetched initial {len(new_results)} results from CORE.")
+            scroll_id = data.get("scrollId")
+            if not scroll_id or not batch_results:
+                break  # No more results
 
-        scroll_id = data.get("scrollId")
-
-        # Scroll if needed and haven't reached max_results
-        while scroll_id and len(results) < max_results:
-            logging.info(f"Scrolling CORE results... (Currently have {len(results)}, need {max_results})")
-            # Ensure limit doesn't cause overshoot if close to max_results
-            remaining_needed = max_results - len(results)
-            current_limit = min(limit, remaining_needed)
-            if current_limit <= 0: break # Should not happen with main check, but safeguard
-
-            scroll_url = f"{CORE_API_ENDPOINT}search/works?scrollId={scroll_id}&limit={current_limit}"
-            # Consider a small delay if scrolling very rapidly, although session retry helps
-            # time.sleep(0.2) # Optional small delay
-
-            response = core_session.get(scroll_url) # Use the session
-            if response.status_code == 200:
-                data = response.json()
-                batch_results = data.get("results", [])
-                new_results = [r for r in batch_results if r.get('id') not in processed_ids]
-                results.extend(new_results)
-                processed_ids.update(r.get('id') for r in new_results if r.get('id'))
-                scroll_id = data.get("scrollId") # Get next scrollId
-                logging.info(f"Fetched {len(new_results)} more results via scroll.")
-            else:
-                # Log specific error but attempt to continue if possible (though unlikely)
-                logging.warning(f"CORE scroll request failed with status {response.status_code}. Response: {response.text}. Stopping scroll.")
-                break # Stop scrolling on error
-            
-            
+            # Prepare next scroll URL, fetch more than needed to account for filtering
+            remaining_needed = max_results - len(english_results)
+            current_limit = min(limit, max(remaining_needed * 2, 10))
+            url = f"{CORE_API_ENDPOINT}search/works?scrollId={scroll_id}&limit={current_limit}"
 
     except requests.exceptions.HTTPError as e:
-         logging.error(f"CORE API HTTP Error: {e.response.status_code} - {e.response.text}")
+        logging.error(f"CORE API HTTP Error: {e.response.status_code} - {e.response.text}")
     except requests.exceptions.RequestException as e:
         logging.error(f"CORE API request failed: {e}")
     except json.JSONDecodeError:
@@ -150,10 +133,8 @@ def search_works(query, limit=200, max_results=10, start_year=0, end_year=0):
     except Exception as e:
         logging.error(f"An unexpected error occurred during CORE search: {e}", exc_info=True)
 
-
-    logging.info(f"Total unique results fetched from CORE: {len(results)}")
-    # Ensure we don't return more than requested, even if scrolling fetched slightly more
-    return results[:max_results]
+    logging.info(f"Total unique English results fetched from CORE: {len(english_results)}")
+    return english_results[:max_results]
 
 
 # --- Text Cleaning Helper ---

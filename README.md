@@ -54,6 +54,7 @@ Research Rover is a modern web application designed to help researchers and stud
 2. **Backend Setup**
    ```bash
    cd backend
+   python -m venv .venv
    pip install -r requirements.txt
    python app.py
    ```

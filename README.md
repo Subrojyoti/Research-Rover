@@ -43,6 +43,18 @@ Research Rover is a modern web application designed to help researchers and stud
 - Node.js (Latest LTS version recommended)
 - npm or yarn package manager
 
+### Configuration
+* Get [CORE API](https://core.ac.uk/services/api)
+* Get [Gemini API](https://aistudio.google.com/apikey)
+* Get [Pubmed API](https://support.nlm.nih.gov/kbArticle/?pn=KA-05317)
+
+Create a secret.txt file inside the `backend/` folder and fill it with the information below:
+```
+CORE_API='Your_Core_API_key'
+GOOGLE_GENAI_API_KEY=your_gemini_api_key
+EMAIL='your_email'
+PUBMED_API_KEY='Your_Pubmed_Api_Key'
+```
 ### Installation
 
 1. **Clone the repository**
@@ -77,6 +89,10 @@ Research Rover is a modern web application designed to help researchers and stud
    - Download paper metadata
    - Access paper sources and download links
 
+3. **AI Chat**
+   - Get response to queries from the collected papers.
+   - Get citations along with reponses.
+
 ## API Endpoints
 
 - `GET /search`: Search for research papers
@@ -84,4 +100,3 @@ Research Rover is a modern web application designed to help researchers and stud
 - `GET /download/<filename>`: Download CSV file
 - `GET /get_csv_data/<filename>`: Get CSV data
 - `GET /get_paginated_results`: Get paginated search results
-

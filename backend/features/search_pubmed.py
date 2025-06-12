@@ -6,6 +6,7 @@ import logging
 import asyncio
 from crawl4ai import AsyncWebCrawler
 from .helper.extract_secrets import get_pubmed_api_key
+import datetime
 
 PUBMED_API_KEY = get_pubmed_api_key()
 
@@ -20,25 +21,28 @@ def fetch_full_text_from_doi(doi):
     # However, keeping it for now if it's used elsewhere, or can be removed if not.
     return asyncio.run(_fetch_full_text(f"https://doi.org/{doi}"))
 
-async def _fetch_full_text(url):
-    # Intentionally keeping the AsyncWebCrawler instantiation within the async function
-    # to ensure a new crawler instance is used for each concurrent task if necessary,
-    # or to leverage its internal session management if it supports concurrency well.
-    # If Crawl4AI's AsyncWebCrawler is designed to be instantiated once and reused for multiple
-    # concurrent calls, this could be optimized by passing a crawler instance.
-    # For now, this is safer.
-    async with AsyncWebCrawler() as crawler:
-        try:
-            result = await crawler.arun(url=url)
-            if result and result.success and hasattr(result, "markdown"):
-                return result.markdown
-            else:
-                logging.warning(f"Failed to fetch or extract markdown from {url}. Result: {result}")
-                return ""
-        except Exception as e:
-            logging.error(f"Exception during fetching full text from {url}: {e}")
-            return ""
+async def _fetch_full_text(url, crawler=None):
+    """
+    Fetches the full text using the provided crawler instance if given,
+    otherwise creates a new one (for backward compatibility).
+    """
+    if crawler is not None:
+        return await _fetch_full_text_with_crawler(crawler, url)
+    else:
+        async with AsyncWebCrawler() as crawler_instance:
+            return await _fetch_full_text_with_crawler(crawler_instance, url)
 
+async def _fetch_full_text_with_crawler(crawler, url):
+    try:
+        result = await crawler.arun(url=url)
+        if result and result.success and hasattr(result, "markdown"):
+            return result.markdown
+        else:
+            logging.warning(f"Failed to fetch or extract markdown from {url}. Result: {result}")
+            return ""
+    except Exception as e:
+        logging.error(f"Exception during fetching full text from {url}: {e}")
+        return ""
 def search_pubmed(query, max_results=100, start_year=0, end_year=0):
     """
     Search PubMed for articles matching the query and year range.
@@ -49,14 +53,15 @@ def search_pubmed(query, max_results=100, start_year=0, end_year=0):
     
     # Construct date range for the query
     date_range = ""
+    today_str = datetime.date.today().strftime("%Y/%m/%d")
     if start_year and end_year:
-        date_range = f"{start_year}:{end_year}[dp]"
+        date_range = f"'{start_year}/01/01'[Date - Create]:'{end_year}/12/31[Date - Create]'"
         logging.info(f"Using date range filter: {start_year} to {end_year}")
     elif start_year:
-        date_range = f"{start_year}:9999[dp]"
-        logging.info(f"Using date range filter: {start_year} to present")
+        date_range = f"'{start_year}/01/01'[Date - Create]:'{today_str}'[Date - Create]"
+        logging.info(f"Using date range filter: {start_year} to present ({today_str})")
     elif end_year:
-        date_range = f"0001:{end_year}[dp]"
+        date_range = f"'0001/01/01'[Date - Create]:'{end_year}/12/31'[Date - Create]"
         logging.info(f"Using date range filter: earliest to {end_year}")
     
     if date_range:
@@ -196,17 +201,22 @@ def search_pubmed(query, max_results=100, start_year=0, end_year=0):
                 'pmid': pmid
             })
 
-        # Concurrently fetch all full texts
+        # Concurrently fetch all full texts using a single crawler instance
         logging.info(f"Step 4: Concurrently fetching full text for {len(doi_to_fetch)} unique DOIs.")
-        full_text_tasks = [_fetch_full_text(f"https://doi.org/{d}") for d in doi_to_fetch]
-        
-        # Run the asynchronous tasks
-        # This needs to be run within an asyncio event loop.
-        # The search_pubmed function itself is synchronous, so we need to manage the loop.
+
+        async def fetch_all_full_texts(dois):
+            async with AsyncWebCrawler() as crawler:
+                tasks = [
+                    _fetch_full_text(f"https://doi.org/{d}", crawler=crawler)
+                    for d in dois
+                ]
+                return await asyncio.gather(*tasks)
+
+        # Run the asynchronous tasks with a single crawler instance
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            fetched_full_texts_list = loop.run_until_complete(asyncio.gather(*full_text_tasks))
+            fetched_full_texts_list = loop.run_until_complete(fetch_all_full_texts(doi_to_fetch))
         finally:
             loop.close()
 

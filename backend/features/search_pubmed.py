@@ -101,25 +101,27 @@ def search_pubmed(query, max_results=100, start_year=0, end_year=0):
         
         logging.info(f"PubMed found {count} total matches, retrieved {len(id_list)} article IDs")
         
-        # Fetch article details
-        logging.info("Step 2: Fetching detailed article data from PubMed EFetch")
-        ids = ','.join(id_list)
-        efetch_url = (
-            'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi'
-            '?db=pubmed'
-            f'&id={ids}'
-            '&retmode=xml'
-            f'&api_key={PUBMED_API_KEY}'
-        )
-        logging.debug(f"EFetch URL (without IDs for brevity): {efetch_url.split('&id=')[0]}")
+        # Fetch article details in batches to avoid URL too long error
+        logging.info("Step 2: Fetching detailed article data from PubMed EFetch in batches")
+        BATCH_SIZE = 200  # Safe batch size for PubMed EFetch
+        efetch_xml_chunks = []
+        for i in range(0, len(id_list), BATCH_SIZE):
+            batch_ids = id_list[i:i+BATCH_SIZE]
+            ids = ','.join(batch_ids)
+            efetch_url = (
+                'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi'
+                '?db=pubmed'
+                f'&id={ids}'
+                '&retmode=xml'
+                f'&api_key={PUBMED_API_KEY}'
+            )
+            logging.debug(f"EFetch URL (batch {i//BATCH_SIZE+1}): {efetch_url.split('&id=')[0]}")
+            efetch_response = requests.get(efetch_url)
+            efetch_response.raise_for_status()
+            efetch_xml_chunks.append(efetch_response.content)
         
-        efetch_response = requests.get(efetch_url)
-        efetch_response.raise_for_status()
-        efetch_data = efetch_response.content
-        
-        # Parse XML response
-        logging.info("Step 3: Parsing XML data from PubMed")
-        root = ET.fromstring(efetch_data)
+        # Parse XML responses from all batches
+        logging.info("Step 3: Parsing XML data from PubMed (all batches)")
         articles = []
         articles_processed = 0
         articles_with_doi = 0
@@ -129,77 +131,79 @@ def search_pubmed(query, max_results=100, start_year=0, end_year=0):
         doi_to_fetch = []
         parsed_articles_metadata = []
 
-        for article_node in root.findall('.//PubmedArticle'):
-            articles_processed += 1
-            title = article_node.findtext('.//ArticleTitle')
-            abstract = article_node.findtext('.//AbstractText')
-            
-            # Extract authors
-            authors = []
-            for author_element in article_node.findall('.//Author'):
-                last_name = author_element.findtext('LastName')
-                fore_name = author_element.findtext('ForeName')
-                if last_name and fore_name:
-                    authors.append(f"{fore_name} {last_name}")
-                elif last_name:
-                    authors.append(last_name)
-            authors_str = ', '.join(authors)
-            
-            # Extract publication date
-            pub_date = article_node.find('.//PubDate')
-            year = ""
-            if pub_date is not None:
-                year = pub_date.findtext('Year')
-                month = pub_date.findtext('Month')
-                day = pub_date.findtext('Day')
-                date_parts = [year, month, day]
-                date_str = '-'.join(part for part in date_parts if part)
-            else:
-                date_str = ''
-            
-            journal = article_node.findtext('.//Journal/Title')
-            
-            # Extract DOI
-            doi = ''
-            for eid in article_node.findall('.//ArticleId'):
-                if eid.attrib.get('IdType') == 'doi':
-                    doi_text = eid.text
-                    if doi_text: # Ensure DOI text is not None or empty
-                        doi = doi_text.strip()
-                        articles_with_doi += 1
-                        if doi not in doi_to_fetch: # Avoid duplicate fetches for the same DOI
-                             doi_to_fetch.append(doi)
-                    break
-            
-            # Extract keywords (MeSH terms)
-            keyword_list = []
-            for mesh_heading in article_node.findall('.//MeshHeading'):
-                descriptor = mesh_heading.findtext('DescriptorName')
-                if descriptor:
-                    keyword_list.append(descriptor)
-            
-            if keyword_list:
-                articles_with_mesh += 1
-                logging.debug(f"Found {len(keyword_list)} MeSH terms for article: {title[:50] if title else 'Untitled'}...")
-            
-            # Extract PMID for building the URL
-            pmid = ''
-            for eid in article_node.findall('.//ArticleId'):
-                if eid.attrib.get('IdType') == 'pubmed':
-                    pmid = eid.text
-                    break
+        for efetch_data in efetch_xml_chunks:
+            root = ET.fromstring(efetch_data)
+            for article_node in root.findall('.//PubmedArticle'):
+                articles_processed += 1
+                title = article_node.findtext('.//ArticleTitle')
+                abstract = article_node.findtext('.//AbstractText')
+                
+                # Extract authors
+                authors = []
+                for author_element in article_node.findall('.//Author'):
+                    last_name = author_element.findtext('LastName')
+                    fore_name = author_element.findtext('ForeName')
+                    if last_name and fore_name:
+                        authors.append(f"{fore_name} {last_name}")
+                    elif last_name:
+                        authors.append(last_name)
+                authors_str = ', '.join(authors)
+                
+                # Extract publication date
+                pub_date = article_node.find('.//PubDate')
+                year = ""
+                if pub_date is not None:
+                    year = pub_date.findtext('Year')
+                    month = pub_date.findtext('Month')
+                    day = pub_date.findtext('Day')
+                    date_parts = [year, month, day]
+                    date_str = '-'.join(part for part in date_parts if part)
+                else:
+                    date_str = ''
+                
+                journal = article_node.findtext('.//Journal/Title')
+                
+                # Extract DOI
+                doi = ''
+                for eid in article_node.findall('.//ArticleId'):
+                    if eid.attrib.get('IdType') == 'doi':
+                        doi_text = eid.text
+                        if doi_text: # Ensure DOI text is not None or empty
+                            doi = doi_text.strip()
+                            articles_with_doi += 1
+                            if doi not in doi_to_fetch: # Avoid duplicate fetches for the same DOI
+                                 doi_to_fetch.append(doi)
+                        break
+                
+                # Extract keywords (MeSH terms)
+                keyword_list = []
+                for mesh_heading in article_node.findall('.//MeshHeading'):
+                    descriptor = mesh_heading.findtext('DescriptorName')
+                    if descriptor:
+                        keyword_list.append(descriptor)
+                
+                if keyword_list:
+                    articles_with_mesh += 1
+                    logging.debug(f"Found {len(keyword_list)} MeSH terms for article: {title[:50] if title else 'Untitled'}...")
+                
+                # Extract PMID for building the URL
+                pmid = ''
+                for eid in article_node.findall('.//ArticleId'):
+                    if eid.attrib.get('IdType') == 'pubmed':
+                        pmid = eid.text
+                        break
 
-            parsed_articles_metadata.append({
-                'title': title,
-                'abstract': abstract,
-                'authors_str': authors_str,
-                'year': year,
-                'date_str': date_str,
-                'journal': journal,
-                'doi': doi,
-                'keyword_list': keyword_list,
-                'pmid': pmid
-            })
+                parsed_articles_metadata.append({
+                    'title': title,
+                    'abstract': abstract,
+                    'authors_str': authors_str,
+                    'year': year,
+                    'date_str': date_str,
+                    'journal': journal,
+                    'doi': doi,
+                    'keyword_list': keyword_list,
+                    'pmid': pmid
+                })
 
         # Concurrently fetch all full texts using a single crawler instance
         logging.info(f"Step 4: Concurrently fetching full text for {len(doi_to_fetch)} unique DOIs.")
